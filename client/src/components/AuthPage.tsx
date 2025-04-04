@@ -46,8 +46,27 @@ function AuthPage() {
     setLoading(false);
   };
 
-  // TODO: Add Google Login button and handler
-  // const handleGoogleLogin = async () => { ... supabase.auth.signInWithOAuth({ provider: 'google' }) ... };
+  // Add Google Login button and handler
+  const handleGoogleLogin = async () => {
+    setLoading(true);
+    setMessage('');
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        // Optional: Add scopes or redirect options if needed
+        // redirectTo: window.location.origin // Redirect back to the app after login
+      },
+    });
+    if (error) {
+      setMessage(`Google login failed: ${error.message}`);
+      setLoading(false);
+    } else {
+      // Supabase handles the redirect to Google and back.
+      // If successful, the user session will be updated automatically.
+      setMessage('Redirecting to Google...');
+      // No need to setLoading(false) here as the page will redirect
+    }
+  };
 
   return (
     <div>
@@ -76,7 +95,7 @@ function AuthPage() {
         </button>
       </form>
 
-      <form onSubmit={handleSignup}>
+      <form onSubmit={handleSignup} style={{ marginBottom: '20px' }}>
          <h3>Sign Up</h3>
          {/* Reuse email/password fields visually or duplicate them for clarity */}
          <input
@@ -100,8 +119,13 @@ function AuthPage() {
         </button>
       </form>
 
-      {/* Placeholder for Google Login */}
-      {/* <button onClick={handleGoogleLogin} disabled={loading}>Login with Google</button> */}
+      {/* Divider */}
+      <hr style={{ margin: '20px 0' }} />
+
+      {/* Google Login Button */}
+      <button onClick={handleGoogleLogin} disabled={loading} style={{ padding: '10px 15px', backgroundColor: '#db4437', color: 'white', border: 'none', cursor: 'pointer' }}>
+        {loading ? 'Loading...' : 'Login with Google'}
+      </button>
     </div>
   );
 }
