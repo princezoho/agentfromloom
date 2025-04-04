@@ -36,6 +36,10 @@ const getLoomVideoId = (url: string): string | null => {
         if (parsedUrl.pathname.startsWith('/v/')) {
             return parsedUrl.pathname.split('/')[2];
         }
+        // Handle edit URLs like https://www.loom.com/edit/...
+        if (parsedUrl.pathname.startsWith('/edit/')) {
+            return parsedUrl.pathname.split('/')[2];
+        }
     } catch (error) {
         console.error("Error parsing Loom URL:", error);
         // Fallback for potentially simpler formats or non-URL strings
@@ -59,7 +63,12 @@ function DisplayPage() {
     const [chunks, setChunks] = useState<Chunk[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [actionStatus, setActionStatus] = useState<Record<string, { loading: boolean; message: string; success: boolean | null }>>({});
+    const [actionStatus, setActionStatus] = useState<Record<string, { 
+        loading: boolean; 
+        message: string; 
+        success: boolean | null;
+        screenshot?: string; // Base64 encoded screenshot
+    }>>({});
     const [recordingChunkId, setRecordingChunkId] = useState<string | null>(null); // State for recording mode
     const [isSaving, setIsSaving] = useState(false); // State for save button
     const [saveMessage, setSaveMessage] = useState<string | null>(null); // State for save status
@@ -69,41 +78,76 @@ function DisplayPage() {
         if (loomUrl) {
             setIsLoading(true);
             setError(null);
-            fetch('http://localhost:3001/api/analyze', { // Call the backend API
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ loomUrl }),
-            })
-            .then(response => {
-                if (!response.ok) {
-                    // Try to parse error message from backend if available
-                    return response.json().then(errData => {
-                        throw new Error(errData.error || `HTTP error! status: ${response.status}`);
-                    }).catch(() => {
-                        // Fallback if no JSON error body
-                        throw new Error(`HTTP error! status: ${response.status}`);
+            
+            // Function to make API call with retry logic
+            const fetchAnalysis = async (retryCount = 0, maxRetries = 3) => {
+                try {
+                    console.log(`Attempting to analyze Loom URL (attempt ${retryCount + 1}): ${loomUrl}`);
+                    
+                    const response = await fetch('http://localhost:3001/api/analyze', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ loomUrl }),
                     });
+                    
+                    // Read the response body as text first to help with debugging
+                    const responseText = await response.text();
+                    
+                    // Try to parse as JSON
+                    let data;
+                    try {
+                        data = JSON.parse(responseText);
+                    } catch (e) {
+                        console.error("Failed to parse response as JSON:", responseText);
+                        throw new Error(`Invalid JSON response from server: ${responseText.substring(0, 100)}...`);
+                    }
+                    
+                    if (!response.ok) {
+                        // Structured error from server
+                        const errorMsg = data.error || `HTTP error! status: ${response.status}`;
+                        const errorDetails = data.details ? `\nDetails: ${data.details}` : '';
+                        throw new Error(`${errorMsg}${errorDetails}`);
+                    }
+                    
+                    if (data.chunks) {
+                        console.log(`Successfully retrieved ${data.chunks.length} chunks`);
+                        setChunks(data.chunks);
+                    } else {
+                        throw new Error('Invalid data structure received from server: missing chunks array');
+                    }
+                } catch (err: any) {
+                    console.error("Error fetching chunks:", err);
+                    
+                    // Network errors often need retries
+                    const isNetworkError = err.message.includes('fetch') || 
+                                          err.message.includes('network') ||
+                                          err.message.includes('ECONNREFUSED');
+                    
+                    // If we haven't tried too many times and it's a retriable error, retry
+                    if (retryCount < maxRetries && isNetworkError) {
+                        const backoffTime = Math.pow(2, retryCount) * 1000; // Exponential backoff
+                        console.log(`Retrying in ${backoffTime}ms...`);
+                        
+                        setTimeout(() => {
+                            fetchAnalysis(retryCount + 1, maxRetries);
+                        }, backoffTime);
+                        return;
+                    }
+                    
+                    // Otherwise, show the error
+                    setError(err.message || 'Failed to analyze Loom video. Please try again.');
+                    setIsLoading(false);
                 }
-                return response.json();
-            })
-            .then(data => {
-                if (data.chunks) {
-                    setChunks(data.chunks);
-                } else {
-                    throw new Error('Invalid data structure received from server');
-                }
-            })
-            .catch(err => {
-                console.error("Failed to fetch chunks:", err);
-                setError(err.message || 'Failed to analyze Loom video. Please try again.');
-            })
-            .finally(() => {
-                setIsLoading(false);
-            });
+            };
+            
+            fetchAnalysis()
+                .finally(() => {
+                    setIsLoading(false);
+                });
         }
-    }, [loomUrl]); // Dependency array ensures this runs when loomUrl changes
+    }, [loomUrl]);
 
     // Function to handle executing an action for a chunk
     const handleExecuteAction = async (chunkId: string, action: Action | undefined) => {
@@ -115,25 +159,64 @@ function DisplayPage() {
         setActionStatus(prev => ({ ...prev, [chunkId]: { loading: true, message: 'Executing...', success: null } }));
 
         try {
+            // Set options for execution
+            const executionOptions = {
+                headless: false, // Show browser for visibility
+                stopOnError: true, // Stop on first error
+            };
+
             const response = await fetch('http://localhost:3001/api/execute_action', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ action }),
+                body: JSON.stringify({ 
+                    action, // For backward compatibility
+                    actions: [action], // As an array for new API
+                    ...executionOptions
+                }),
             });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                let errMessage;
+                try {
+                    const errJson = JSON.parse(errText);
+                    errMessage = errJson.error || `Action execution failed with status: ${response.status}`;
+                } catch (e) {
+                    errMessage = `Action execution failed with status: ${response.status}: ${errText}`;
+                }
+                throw new Error(errMessage);
+            }
 
             const result = await response.json();
 
-            if (!response.ok || !result.success) {
-                throw new Error(result.error || `Action execution failed with status: ${response.status}`);
+            if (!result.success) {
+                // Get detailed error message from results if available
+                const failedAction = result.results?.find((r: any) => !r.success);
+                throw new Error(failedAction?.error || result.error || `Action execution failed`);
             }
 
-            setActionStatus(prev => ({ ...prev, [chunkId]: { loading: false, message: result.message || 'Action executed successfully!', success: true } }));
+            // Display success message with more details if available
+            const successMsg = result.results?.length > 0 
+                ? `${result.results[0].message || 'Action executed successfully!'}`
+                : 'Action executed successfully!';
+            
+            setActionStatus(prev => ({ ...prev, [chunkId]: { 
+                loading: false, 
+                message: successMsg, 
+                success: true,
+                // Store screenshot if available
+                screenshot: result.results?.[0]?.screenshot || result.finalScreenshot
+            }}));
 
         } catch (err: any) {
-             console.error("Failed to execute action:", err);
-             setActionStatus(prev => ({ ...prev, [chunkId]: { loading: false, message: err.message || 'Failed to execute action.', success: false } }));
+            console.error("Failed to execute action:", err);
+            setActionStatus(prev => ({ ...prev, [chunkId]: { 
+                loading: false, 
+                message: err.message || 'Failed to execute action.', 
+                success: false
+            }}));
         }
     };
 
@@ -281,14 +364,28 @@ function DisplayPage() {
                                                 Take Control
                                             </button>
                                             {status && (
-                                                <span style={{
-                                                    marginLeft: '10px',
-                                                    color: status.success === true ? 'green' : status.success === false ? 'red' : 'black',
-                                                    fontSize: '0.9em'
-                                                 }}>
-                                                     {status.message}
-                                                 </span>
-                                             )}
+                                                <div>
+                                                    <span style={{
+                                                        marginLeft: '10px',
+                                                        color: status.success === true ? 'green' : status.success === false ? 'red' : 'black',
+                                                        fontSize: '0.9em'
+                                                    }}>
+                                                        {status.message}
+                                                    </span>
+                                                    
+                                                    {/* Display screenshot if available */}
+                                                    {status.screenshot && (
+                                                        <div style={{ marginTop: '10px' }}>
+                                                            <h4>Action Result</h4>
+                                                            <img 
+                                                                src={`data:image/png;base64,${status.screenshot}`} 
+                                                                alt="Action result" 
+                                                                style={{ maxWidth: '100%', border: '1px solid #ccc' }}
+                                                            />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                     {isRecordingThisChunk && (

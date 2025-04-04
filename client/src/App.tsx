@@ -7,8 +7,8 @@ import {
 } from 'react-router-dom';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from './supabaseClient';
-import HomePage from './components/HomePage.tsx';
-import DisplayPage from './components/DisplayPage.tsx';
+import HomePage from './components/HomePage';
+import DisplayPage from './components/DisplayPage';
 import AuthPage from './components/AuthPage';
 import AgentDashboard from './components/AgentDashboard';
 import './App.css';
@@ -50,7 +50,11 @@ function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/display" element={<DisplayPage />} />
           <Route path="/auth" element={<AuthPage />} />
-          <Route path="/dashboard" element={session ? <AgentDashboard key={session.user.id} session={session} /> : <div>Please log in to view the dashboard.</div>} />
+          <Route path="/dashboard" element={
+            session ? 
+            <AgentDashboard key={session.user.id} session={session} /> : 
+            <div>Please log in to view the dashboard.</div>
+          } />
         </Routes>
       </div>
     </Router>

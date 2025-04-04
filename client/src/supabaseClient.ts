@@ -8,4 +8,17 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Supabase URL or Anon Key is missing.');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey); 
+// Create the Supabase client with fixed auth settings
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true
+  },
+  global: {
+    // Remove the custom fetch that's causing CORS issues
+    headers: {
+      'X-Client-Info': 'supabase-js/2.38.4'
+    }
+  }
+}); 
