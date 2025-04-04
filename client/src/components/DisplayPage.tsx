@@ -1,5 +1,14 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
+
+// Define an interface for the Chunk data structure
+interface Chunk {
+    id: string;
+    order: number;
+    startTime: string;
+    endTime: string;
+    name: string;
+}
 
 // Helper function to extract Loom video ID from various URL formats
 const getLoomVideoId = (url: string): string | null => {
@@ -36,6 +45,46 @@ function DisplayPage() {
     const videoId = loomUrl ? getLoomVideoId(loomUrl) : null;
     const embedUrl = videoId ? `https://www.loom.com/embed/${videoId}` : null;
 
+    // State for chunks and loading/error status
+    const [chunks, setChunks] = useState<Chunk[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    // useEffect hook to call the analysis API when the component mounts
+    useEffect(() => {
+        if (loomUrl) {
+            setIsLoading(true);
+            setError(null);
+            fetch('http://localhost:3001/api/analyze', { // Call the backend API
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ loomUrl }),
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.chunks) {
+                    setChunks(data.chunks);
+                } else {
+                    throw new Error('Invalid data structure received from server');
+                }
+            })
+            .catch(err => {
+                console.error("Failed to fetch chunks:", err);
+                setError(err.message || 'Failed to analyze Loom video. Please try again.');
+            })
+            .finally(() => {
+                setIsLoading(false);
+            });
+        }
+    }, [loomUrl]); // Dependency array ensures this runs when loomUrl changes
+
     if (!loomUrl) {
         return <div>Error: No Loom URL provided.</div>;
     }
@@ -45,10 +94,10 @@ function DisplayPage() {
     }
 
     return (
-        <div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <h2>Displaying Loom Video</h2>
             <p>Original URL: {loomUrl}</p>
-            <div style={{ position: 'relative', paddingBottom: '62.5%', height: 0 }}>
+            <div style={{ position: 'relative', paddingBottom: '62.5%', height: 0, width: '80%', maxWidth: '800px', marginBottom: '20px' }}>
                 <iframe
                     src={embedUrl}
                     frameBorder="0"
@@ -63,7 +112,29 @@ function DisplayPage() {
                     title="Loom Video"
                 ></iframe>
             </div>
-            {/* We will add the chunk management UI here later */}
+
+            <hr style={{ width: '80%', margin: '20px 0' }} />
+
+            <h2>Video Chunks</h2>
+            {isLoading && <p>Analyzing video...</p>}
+            {error && <p style={{ color: 'red' }}>Error: {error}</p>}
+            {!isLoading && !error && (
+                <ul style={{ listStyle: 'none', padding: 0, width: '80%', maxWidth: '800px' }}>
+                    {chunks.length > 0 ? (
+                        chunks.map(chunk => (
+                            <li key={chunk.id} style={{ border: '1px solid #ccc', marginBottom: '10px', padding: '15px', textAlign: 'left' }}>
+                                <strong>Chunk {chunk.order}: {chunk.name}</strong> ({chunk.startTime} - {chunk.endTime})
+                                {/* Placeholder for micro-video preview */}
+                                <div style={{ height: '50px', backgroundColor: '#eee', marginTop: '10px', textAlign: 'center', lineHeight: '50px', fontStyle: 'italic' }}>
+                                    [Micro-video preview placeholder]
+                                </div>
+                            </li>
+                        ))
+                    ) : (
+                        <p>No chunks generated yet.</p>
+                    )}
+                </ul>
+            )}
         </div>
     );
 }
