@@ -19,6 +19,11 @@ interface Chunk {
     endTime: string;
     name: string;
     action?: Action; // Make action optional initially
+    visualData?: {
+        previewAvailable: boolean;
+        previewUrl: string | null;
+        thumbnailColor: string;
+    };
 }
 
 // Helper function to extract Loom video ID from various URL formats
@@ -546,6 +551,12 @@ function DisplayPage() {
              </div>
 
             <h2>Video Chunks</h2>
+            <div style={{ width: '80%', maxWidth: '800px', marginBottom: '15px', textAlign: 'left' }}>
+                <p>
+                    Video chunks represent segments of the Loom video that contain distinct actions. Each chunk has an 
+                    automatically detected action that can be run individually or modified.
+                </p>
+            </div>
             {isLoading && <p>Analyzing video...</p>}
             {error && <p style={{ color: 'red' }}>Error: {error}</p>}
             {!isLoading && !error && (
@@ -664,8 +675,65 @@ function DisplayPage() {
                                             </div>
                                         </div>
                                     )}
-                                    <div style={{ height: '50px', backgroundColor: '#eee', marginTop: '10px', textAlign: 'center', lineHeight: '50px', fontStyle: 'italic' }}>
-                                        [Micro-video preview placeholder]
+                                    <div style={{ 
+                                        backgroundColor: '#f5f5f5', 
+                                        marginTop: '10px', 
+                                        padding: '10px',
+                                        borderRadius: '4px',
+                                        border: '1px solid #ddd'
+                                    }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div>
+                                                <div style={{ fontSize: '0.9em', fontWeight: 'bold', marginBottom: '5px' }}>
+                                                    Chunk Preview: {chunk.startTime} - {chunk.endTime}
+                                                </div>
+                                                <div style={{ display: 'flex', alignItems: 'center' }}>
+                                                    <input 
+                                                        type="range" 
+                                                        min="0" 
+                                                        max="100" 
+                                                        defaultValue="0"
+                                                        style={{ width: '150px', marginRight: '10px' }}
+                                                        aria-label="Scrub through chunk"
+                                                    />
+                                                    <button style={{ padding: '2px 8px', fontSize: '0.8em' }}>
+                                                        <span role="img" aria-label="Play">▶️</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div style={{ 
+                                                width: '160px', 
+                                                height: '90px', 
+                                                backgroundColor: chunk.visualData?.thumbnailColor || '#e0e0e0', 
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                border: '1px solid #ccc',
+                                                borderRadius: '3px',
+                                                overflow: 'hidden'
+                                            }}>
+                                                {chunk.visualData?.previewUrl ? (
+                                                    <img 
+                                                        src={chunk.visualData.previewUrl}
+                                                        alt={`Preview of ${chunk.name}`}
+                                                        style={{ maxWidth: '100%', maxHeight: '100%' }}
+                                                    />
+                                                ) : (
+                                                    <div style={{ 
+                                                        textAlign: 'center', 
+                                                        fontSize: '0.8em',
+                                                        padding: '10px'
+                                                    }}>
+                                                        <div style={{ marginBottom: '5px' }}>
+                                                            <span role="img" aria-label="Video">🎬</span> {chunk.name}
+                                                        </div>
+                                                        <div style={{ fontSize: '0.8em', color: '#666' }}>
+                                                            ({chunk.startTime} - {chunk.endTime})
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
                                     </div>
                                 </li>
                             );
@@ -675,6 +743,22 @@ function DisplayPage() {
                     )}
                 </ul>
             )}
+
+            {/* MicroVideoPlayer Component - this would be moved to a separate file in a production app */}
+            <div style={{ padding: '20px', backgroundColor: '#f7f7f7', borderRadius: '5px', marginTop: '20px', width: '80%', maxWidth: '800px' }}>
+                <h3>About Micro-Video Players</h3>
+                <p>
+                    In a full implementation, each chunk would have a micro-video player that allows you to:
+                </p>
+                <ul>
+                    <li><strong>Preview the chunk</strong> - See a visual preview of what happens in that part of the video</li>
+                    <li><strong>Scrub through the chunk</strong> - Navigate within the specific time range of the chunk</li>
+                    <li><strong>Set precise start/end times</strong> - Adjust the chunk boundaries</li>
+                </ul>
+                <p>
+                    The current implementation uses timestamps and basic chunking to demonstrate the concept.
+                </p>
+            </div>
         </div>
     );
 }

@@ -193,28 +193,56 @@ async function createVisualChunks(page, totalDuration) {
   const maxChunks = Math.min(6, Math.ceil(totalDuration / 15)); // Max 6 chunks or 1 per 15 seconds
   const chunkDuration = totalDuration / maxChunks;
   
-  // Create specific action types based on typical web automation patterns
-  const actionTypes = [
-    { type: 'goto', description: 'Navigate to website' },
-    { type: 'click', description: 'Click on an element' },
-    { type: 'fill', description: 'Enter text in a field' },
-    { type: 'select', description: 'Select from dropdown' },
-    { type: 'wait', description: 'Wait for element' },
-    { type: 'hover', description: 'Hover over element' }
-  ];
-  
-  // More realistic chunk names based on common web automation tasks
-  const chunkNames = [
-    'Opening Website',
-    'Logging In',
-    'Navigating Dashboard',
-    'Filling Form',
-    'Submitting Data',
-    'Viewing Results',
-    'Checking Notifications',
-    'Selecting Options',
-    'Downloading Content',
-    'Logging Out'
+  // Define more specific action scenarios based on chunk order for a more realistic demo
+  const chunkScenarios = [
+    {
+      name: 'Opening Website',
+      action: { type: 'goto', url: 'https://example.com' },
+      description: 'Navigate to the starting website'
+    },
+    {
+      name: 'Logging In',
+      action: { 
+        type: 'fill', 
+        selector: '#username',
+        value: 'demo_user', 
+        description: 'Enter username in login form'
+      }
+    },
+    {
+      name: 'Clicking Dashboard',
+      action: { 
+        type: 'click', 
+        selector: '.dashboard-link',
+        description: 'Navigate to the dashboard area'
+      }
+    },
+    {
+      name: 'Selecting Options',
+      action: { 
+        type: 'select', 
+        selector: '#product-dropdown',
+        value: 'product-123',
+        description: 'Select the target product'
+      }
+    },
+    {
+      name: 'Submitting Form',
+      action: { 
+        type: 'click', 
+        selector: '#submit-button',
+        description: 'Submit the completed form'
+      }
+    },
+    {
+      name: 'Reviewing Results',
+      action: { 
+        type: 'wait', 
+        selector: '.confirmation-message',
+        timeout: 5000,
+        description: 'Wait for confirmation'
+      }
+    }
   ];
   
   // Create a unique ID for each chunk based on timestamp
@@ -233,34 +261,8 @@ async function createVisualChunks(page, totalDuration) {
     // Wait briefly for the frame to load
     await page.waitForTimeout(500);
     
-    // Take a screenshot (we won't use it directly now, but in a real implementation
-    // we would analyze the screenshot content)
-    // const screenshot = await page.screenshot({ type: 'jpeg', quality: 50 });
-    
-    // Create a chunk with appropriate action based on the index
-    const actionType = actionTypes[i % actionTypes.length];
-    let action;
-    
-    switch (actionType.type) {
-      case 'goto':
-        action = { type: 'goto', url: 'https://example.com' };
-        break;
-      case 'click':
-        action = { type: 'click', selector: '#submit-button' };
-        break;
-      case 'fill':
-        action = { type: 'fill', selector: '#username', value: 'demo_user' };
-        break;
-      case 'select':
-        action = { type: 'select', selector: '#dropdown', value: 'option1' };
-        break;
-      case 'wait':
-        action = { type: 'wait', selector: '.loading-indicator', timeout: 5000 };
-        break;
-      case 'hover':
-        action = { type: 'hover', selector: '.menu-item' };
-        break;
-    }
+    // Use the scenario matching the current index (or cycle through them)
+    const scenario = chunkScenarios[i % chunkScenarios.length];
     
     // Format the time in MM:SS format
     const formatTime = (seconds) => {
@@ -274,8 +276,13 @@ async function createVisualChunks(page, totalDuration) {
       order: i + 1,
       startTime: formatTime(startTime),
       endTime: formatTime(endTime),
-      name: chunkNames[i % chunkNames.length],
-      action
+      name: scenario.name,
+      action: scenario.action,
+      visualData: {
+        previewAvailable: true,  // In a real implementation, this would be based on actual image processing
+        previewUrl: null,  // Would be an actual URL in production
+        thumbnailColor: ['#f0f0f0', '#e0e6f0', '#f0e0e0', '#e0f0e0', '#f0e0f0', '#e0f0f0'][i % 6] // Just for visual distinction in demo
+      }
     });
   }
   
