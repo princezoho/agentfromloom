@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+// import { Link } from 'react-router-dom'; // No longer needed here
 import { supabase } from '../supabaseClient';
+import { Session } from '@supabase/supabase-js'; // Import Session type
 
 // Interface for Agent data received from API
 interface Agent {
@@ -12,32 +13,25 @@ interface Agent {
     // Add other fields as needed
 }
 
-function AgentDashboard() {
+// Define props interface for the component
+interface AgentDashboardProps {
+    session: Session; // Expect session as a prop
+}
+
+function AgentDashboard({ session }: AgentDashboardProps) { // Destructure session from props
     const [agents, setAgents] = useState<Agent[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [userId, setUserId] = useState<string | null>(null);
+    // const [userId, setUserId] = useState<string | null>(null); // No longer need separate userId state
+    const userId = session.user.id; // Get userId directly from session prop
 
-    // Get user ID on component mount
-    useEffect(() => {
-        const getUser = async () => {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-                setUserId(user.id);
-            } else {
-                setError('You must be logged in to view agents.');
-            }
-        };
-        getUser();
-    }, []);
-
-    // Fetch agents when user ID is available
+    // Fetch agents when component mounts (userId is guaranteed from session prop)
     useEffect(() => {
         if (userId) {
             setIsLoading(true);
             setError(null);
 
-            fetch(`http://localhost:3001/api/agents?userId=${encodeURIComponent(userId)}`) // Pass userId as query param
+            fetch(`http://localhost:3001/api/agents?userId=${encodeURIComponent(userId)}`) 
                 .then(response => {
                     if (!response.ok) {
                          return response.json().then(errData => {
@@ -63,7 +57,9 @@ function AgentDashboard() {
                     setIsLoading(false);
                 });
         }
-    }, [userId]); // Run when userId changes
+    // No longer need separate useEffect for getUser, userId comes from props
+    // }, [userId]); // Change dependency array if needed, maybe just run once?
+    }, []); // Run once on mount since session/userId prop is stable for this instance
 
     return (
         <div>
