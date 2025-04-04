@@ -178,23 +178,38 @@ function AuthPage() {
     setMessage('');
     
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      console.log('Attempting Google login with supabase.auth.signInWithOAuth...');
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin + '/dashboard', // Redirect to dashboard after login
-        },
+          redirectTo: window.location.origin,
+          // Add debug info to URL to see what's happening
+          queryParams: {
+            prompt: 'select_account', // Forces Google to show the account selector
+            access_type: 'offline', // Request a refresh token
+          }
+        }
       });
       
+      console.log('Google login response:', { data, error });
+      
       if (error) {
-        setMessage(`Google login failed: ${error.message}`);
+        console.error('Google login error details:', error);
+        
+        // Handle specific known errors
+        if (error.message.includes('provider is not enabled')) {
+          setMessage('Error: Google provider is not enabled in Supabase. Please enable it in the Supabase dashboard: Authentication → Providers → Google.');
+        } else {
+          setMessage(`Google login failed: ${error.message}`);
+        }
         setLoading(false);
       } else {
-        // Supabase handles the redirect to Google and back
+        // Supabase handles the redirect to Google
         setMessage('Redirecting to Google...');
-        // No need to setLoading(false) here as the page will redirect
+        console.log('Google OAuth initiated successfully, watch for redirect...');
       }
     } catch (err) {
-      console.error('Google login error:', err);
+      console.error('Unexpected Google login error:', err);
       setMessage('An unexpected error occurred with Google login. Please try again later.');
       setLoading(false);
     }
@@ -433,8 +448,38 @@ function AuthPage() {
       <hr style={{ margin: '20px 0' }} />
 
       {/* Google Login Button */}
-      <button onClick={handleGoogleLogin} disabled={loading} style={{ padding: '10px 15px', backgroundColor: '#db4437', color: 'white', border: 'none', cursor: 'pointer' }}>
-        {loading ? 'Loading...' : 'Login with Google'}
+      <button 
+        onClick={handleGoogleLogin} 
+        disabled={loading} 
+        style={{ 
+          padding: '10px 15px', 
+          backgroundColor: 'white', 
+          color: '#444', 
+          border: '1px solid #ddd', 
+          borderRadius: '4px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '220px',
+          fontWeight: 'bold',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+        }}
+      >
+        {loading ? 'Loading...' : (
+          <>
+            <span style={{ 
+              display: 'inline-block', 
+              marginRight: '10px',
+              width: '18px',
+              height: '18px',
+              backgroundImage: 'url(https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg)',
+              backgroundSize: 'contain',
+              backgroundRepeat: 'no-repeat'
+            }}></span>
+            Sign in with Google
+          </>
+        )}
       </button>
       
       {/* Admin Panel Toggle Button */}

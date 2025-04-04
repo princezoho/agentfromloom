@@ -25,41 +25,38 @@ function AgentDashboard({ session }: AgentDashboardProps) { // Destructure sessi
     // const [userId, setUserId] = useState<string | null>(null); // No longer need separate userId state
     const userId = session.user.id; // Get userId directly from session prop
 
-    // Fetch agents when component mounts (userId is guaranteed from session prop)
+    // Fetch agents directly from Supabase when component mounts
     useEffect(() => {
         if (userId) {
             setIsLoading(true);
             setError(null);
 
-            fetch(`http://localhost:3001/api/agents?userId=${encodeURIComponent(userId)}`) 
-                .then(response => {
-                    if (!response.ok) {
-                         return response.json().then(errData => {
-                            throw new Error(errData.error || `HTTP error! status: ${response.status}`);
-                         }).catch(() => {
-                            throw new Error(`HTTP error! status: ${response.status}`);
-                         });
+            // Use Supabase directly instead of the API endpoint
+            const fetchAgents = async () => {
+                try {
+                    const { data, error } = await supabase
+                        .from('Agents')
+                        .select('id, name, description, loom_url, created_at')
+                        .eq('user_id', userId)
+                        .order('created_at', { ascending: false });
+                        
+                    if (error) {
+                        console.error("Supabase error fetching agents:", error);
+                        throw new Error(error.message || "Failed to load agents");
                     }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.success && data.agents) {
-                        setAgents(data.agents);
-                    } else {
-                        throw new Error(data.error || 'Failed to parse agent data.');
-                    }
-                })
-                .catch(err => {
+                    
+                    setAgents(data || []);
+                } catch (err: any) {
                     console.error("Failed to fetch agents:", err);
                     setError(err.message || 'Failed to load agents.');
-                })
-                .finally(() => {
+                } finally {
                     setIsLoading(false);
-                });
+                }
+            };
+            
+            fetchAgents();
         }
-    // No longer need separate useEffect for getUser, userId comes from props
-    // }, [userId]); // Change dependency array if needed, maybe just run once?
-    }, []); // Run once on mount since session/userId prop is stable for this instance
+    }, [userId]); // Include userId in dependency array
 
     return (
         <div>

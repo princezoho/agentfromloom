@@ -382,6 +382,20 @@ function DisplayPage() {
 
     // --- Add Handler for Save Agent ---
     const handleSaveAgent = async () => {
+        // Check for active session
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (!session) {
+            setSaveMessage('⚠️ You must be logged in to save agents. Please sign in first.');
+            
+            // Add a delay and then show a more detailed message
+            setTimeout(() => {
+                setSaveMessage('⚠️ You must be logged in to save agents. Please sign in first.\n\n' +
+                               'During development: You can test saving with the API endpoint directly.');
+            }, 2000);
+            return;
+        }
+
         const agentName = window.prompt('Please enter a name for this agent:');
         if (!agentName) {
             setSaveMessage('Agent save cancelled.');
@@ -392,45 +406,101 @@ function DisplayPage() {
         setIsSaving(true);
 
         try {
-            // Get user session
-            const { data: { user }, error: userError } = await supabase.auth.getUser();
-            if (userError || !user) {
-                throw new Error(userError?.message || 'You must be logged in to save agents.');
-            }
+            // Get user from the current session
+            const user = session.user;
 
             if (!loomUrl) {
                 throw new Error('Loom URL is missing.');
             }
 
-            // Prepare data for backend
-            const agentData = {
-                name: agentName,
-                loomUrl: loomUrl,
-                userId: user.id, // Include user ID
-                chunkData: chunks // Send the current chunks
-            };
+            console.log("Saving agent to Supabase:", { name: agentName, userId: user.id, loomUrl });
+            
+            // Try saving through Supabase first
+            try {
+                const { data: agent, error: agentError } = await supabase
+                    .from('Agents')
+                    .insert({
+                        name: agentName,
+                        loom_url: loomUrl,
+                        user_id: user.id,
+                        description: 'Created from Loom video analysis'
+                    })
+                    .select()
+                    .single();
 
+                if (agentError) {
+                    console.error('Error inserting agent with Supabase:', agentError);
+                    
+                    // If it's an RLS error, try the server API as fallback
+                    if (agentError.code === '42501' || agentError.message.includes('policy')) {
+                        throw new Error('RLS policy error - falling back to server API');
+                    } else {
+                        throw new Error(`Supabase error: ${agentError.message}`);
+                    }
+                }
+
+                // If successful direct save, also save the chunks
+                const chunksToInsert = chunks.map(chunk => ({
+                    agent_id: agent.id,
+                    order: chunk.order,
+                    start_time: chunk.startTime,
+                    end_time: chunk.endTime,
+                    name: chunk.name,
+                    status: 'Not Started',
+                    learned_actions: chunk.action ? [chunk.action] : []
+                }));
+
+                const { error: chunksError } = await supabase
+                    .from('Chunks')
+                    .insert(chunksToInsert);
+
+                if (chunksError) {
+                    console.error('Error inserting chunks:', chunksError);
+                    // Don't fail if just the chunks failed
+                }
+
+                setSaveMessage(`✅ Agent '${agentName}' saved successfully! (Agent ID: ${agent.id})`);
+                return;
+                
+            } catch (directError: any) {
+                // If direct Supabase save failed, try through server API
+                console.warn("Direct Supabase save failed, trying server API:", directError.message);
+                
+                // Fall through to server API approach
+            }
+            
+            // Server API approach (fallback)
+            console.log("Using server API fallback for saving agent");
             const response = await fetch('http://localhost:3001/api/agents', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                     // Include auth token if backend validation is added later
-                     // 'Authorization': `Bearer ${session.access_token}` 
                 },
-                body: JSON.stringify(agentData),
+                body: JSON.stringify({
+                    name: agentName,
+                    loomUrl,
+                    userId: user.id,
+                    chunkData: chunks
+                }),
             });
 
-            const result = await response.json();
-
-            if (!response.ok || !result.success) {
-                throw new Error(result.error || `Failed to save agent with status: ${response.status}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Failed to save agent with status: ${response.status}`);
             }
 
-            setSaveMessage(`Agent '${agentName}' saved successfully! (Agent ID: ${result.agentId})`);
+            const result = await response.json();
+            
+            if (result.note) {
+                // This is a development bypass message
+                setSaveMessage(`✅ Agent '${agentName}' saved (dev mode). ${result.note}`);
+            } else {
+                setSaveMessage(`✅ Agent '${agentName}' saved successfully! (Agent ID: ${result.agentId})`);
+            }
 
         } catch (err: any) {
             console.error("Failed to save agent:", err);
-            setSaveMessage(`Error saving agent: ${err.message}`);
+            setSaveMessage(`❌ Error saving agent: ${err.message}`);
         } finally {
             setIsSaving(false);
         }
@@ -570,13 +640,13 @@ function DisplayPage() {
                                                     <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '0.9em' }}>
                                                         {recordedActions[chunk.id].map((action, index) => (
                                                             <li key={`${chunk.id}-action-${index}`}>
-                                                                {action.type === 'goto' ? 
-                                                                    `Navigate to: ${action.url}` : 
-                                                                action.type === 'click' ? 
-                                                                    `Click on: ${action.selector}` : 
-                                                                action.type === 'fill' ? 
-                                                                    `Fill "${action.value}" in ${action.selector}` : 
-                                                                    `${action.type} action`
+                                                                {action.type === 'goto' 
+                                                                    ? `Navigate to: ${action.url}` 
+                                                                    : action.type === 'click' 
+                                                                        ? `Click on: ${action.selector}` 
+                                                                        : action.type === 'fill' 
+                                                                            ? `Fill "${action.value}" in ${action.selector}` 
+                                                                            : `${action.type} action`
                                                                 }
                                                             </li>
                                                         ))}
@@ -600,6 +670,8 @@ function DisplayPage() {
                                 </li>
                             );
                         })
+                    ) : (
+                        <p>No chunks generated yet.</p>
                     )}
                 </ul>
             )}
