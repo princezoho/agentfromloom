@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
+// Define Action interface (can be expanded later)
+interface Action {
+  type: 'goto' | 'fill' | 'click' | string; // Allow other types
+  url?: string;
+  selector?: string;
+  value?: string;
+}
+
 // Define an interface for the Chunk data structure
 interface Chunk {
     id: string;
@@ -8,6 +16,7 @@ interface Chunk {
     startTime: string;
     endTime: string;
     name: string;
+    action?: Action; // Make action optional initially
 }
 
 // Helper function to extract Loom video ID from various URL formats
@@ -49,6 +58,7 @@ function DisplayPage() {
     const [chunks, setChunks] = useState<Chunk[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [actionStatus, setActionStatus] = useState<Record<string, { loading: boolean; message: string; success: boolean | null }>>({});
 
     // useEffect hook to call the analysis API when the component mounts
     useEffect(() => {
@@ -64,7 +74,13 @@ function DisplayPage() {
             })
             .then(response => {
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    // Try to parse error message from backend if available
+                    return response.json().then(errData => {
+                        throw new Error(errData.error || `HTTP error! status: ${response.status}`);
+                    }).catch(() => {
+                        // Fallback if no JSON error body
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    });
                 }
                 return response.json();
             })
@@ -84,6 +100,38 @@ function DisplayPage() {
             });
         }
     }, [loomUrl]); // Dependency array ensures this runs when loomUrl changes
+
+    // Function to handle executing an action for a chunk
+    const handleExecuteAction = async (chunkId: string, action: Action | undefined) => {
+        if (!action) {
+            setActionStatus(prev => ({ ...prev, [chunkId]: { loading: false, message: 'No action defined for this chunk.', success: false } }));
+            return;
+        }
+
+        setActionStatus(prev => ({ ...prev, [chunkId]: { loading: true, message: 'Executing...', success: null } }));
+
+        try {
+            const response = await fetch('http://localhost:3001/api/execute_action', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ action }),
+            });
+
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || `Action execution failed with status: ${response.status}`);
+            }
+
+            setActionStatus(prev => ({ ...prev, [chunkId]: { loading: false, message: result.message || 'Action executed successfully!', success: true } }));
+
+        } catch (err: any) {
+             console.error("Failed to execute action:", err);
+             setActionStatus(prev => ({ ...prev, [chunkId]: { loading: false, message: err.message || 'Failed to execute action.', success: false } }));
+        }
+    };
 
     if (!loomUrl) {
         return <div>Error: No Loom URL provided.</div>;
@@ -121,15 +169,41 @@ function DisplayPage() {
             {!isLoading && !error && (
                 <ul style={{ listStyle: 'none', padding: 0, width: '80%', maxWidth: '800px' }}>
                     {chunks.length > 0 ? (
-                        chunks.map(chunk => (
-                            <li key={chunk.id} style={{ border: '1px solid #ccc', marginBottom: '10px', padding: '15px', textAlign: 'left' }}>
-                                <strong>Chunk {chunk.order}: {chunk.name}</strong> ({chunk.startTime} - {chunk.endTime})
-                                {/* Placeholder for micro-video preview */}
-                                <div style={{ height: '50px', backgroundColor: '#eee', marginTop: '10px', textAlign: 'center', lineHeight: '50px', fontStyle: 'italic' }}>
-                                    [Micro-video preview placeholder]
-                                </div>
-                            </li>
-                        ))
+                        chunks.map(chunk => {
+                            const status = actionStatus[chunk.id];
+                            return (
+                                <li key={chunk.id} style={{ border: '1px solid #ccc', marginBottom: '10px', padding: '15px', textAlign: 'left' }}>
+                                    <div>
+                                        <strong>Chunk {chunk.order}: {chunk.name}</strong> ({chunk.startTime} - {chunk.endTime})
+                                    </div>
+                                    {chunk.action && (
+                                        <div style={{ marginTop: '10px' }}>
+                                            <pre style={{ fontSize: '0.9em', backgroundColor: '#f0f0f0', padding: '5px' }}>Action: {JSON.stringify(chunk.action)}</pre>
+                                            <button
+                                                onClick={() => handleExecuteAction(chunk.id, chunk.action)}
+                                                disabled={status?.loading}
+                                                style={{ marginTop: '5px', padding: '5px 10px' }}
+                                            >
+                                                {status?.loading ? 'Running...' : 'Run Action'}
+                                            </button>
+                                            {status && (
+                                                <span style={{
+                                                    marginLeft: '10px',
+                                                    color: status.success === true ? 'green' : status.success === false ? 'red' : 'black',
+                                                    fontSize: '0.9em'
+                                                 }}>
+                                                     {status.message}
+                                                 </span>
+                                             )}
+                                        </div>
+                                    )}
+                                    {/* Placeholder for micro-video preview */}
+                                    <div style={{ height: '50px', backgroundColor: '#eee', marginTop: '10px', textAlign: 'center', lineHeight: '50px', fontStyle: 'italic' }}>
+                                        [Micro-video preview placeholder]
+                                    </div>
+                                </li>
+                            );
+                        })
                     ) : (
                         <p>No chunks generated yet.</p>
                     )}
