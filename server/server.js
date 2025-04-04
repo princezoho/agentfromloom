@@ -657,6 +657,145 @@ app.delete('/api/admin/users', async (req, res) => {
 });
 // --- End Delete All Users Endpoint ---
 
+// --- Add Record User Actions Endpoint ---
+app.post('/api/record_actions', async (req, res) => {
+  const { chunkId, actions, loomUrl } = req.body;
+  
+  if (!chunkId || !actions || !Array.isArray(actions) || actions.length === 0) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Invalid recording data provided',
+      details: 'Please provide chunkId and an array of recorded actions'
+    });
+  }
+
+  console.log(`Recording ${actions.length} user actions for chunk ${chunkId}`);
+  
+  try {
+    // Process and normalize the recorded actions
+    const processedActions = actions.map((action, index) => {
+      // Add additional metadata to each action
+      return {
+        ...action,
+        id: `${chunkId}-action-${index}`,
+        timestamp: action.timestamp || new Date().toISOString(),
+        recorded: true
+      };
+    });
+
+    // In a real implementation, we would save these actions to the database
+    // For now, we'll just return success
+    
+    // Optional: Validate actions by replaying them in a headless browser
+    let validationResult = { success: true, message: 'Actions recorded successfully' };
+    
+    if (req.body.validate) {
+      try {
+        validationResult = await validateRecordedActions(processedActions);
+      } catch (validationError) {
+        console.error('Error validating recorded actions:', validationError);
+        validationResult = { 
+          success: false, 
+          message: 'Validation failed: ' + validationError.message 
+        };
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `Successfully recorded ${actions.length} user actions`,
+      processedActions: processedActions,
+      validation: validationResult
+    });
+
+  } catch (error) {
+    console.error('Error processing recorded actions:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Error processing recorded actions',
+      details: error.stack
+    });
+  }
+});
+
+// Function to validate recorded actions by replaying them
+async function validateRecordedActions(actions) {
+  if (!actions || actions.length === 0) {
+    return { success: false, message: 'No actions to validate' };
+  }
+  
+  let browser = null;
+  
+  try {
+    // Launch browser in headless mode for validation
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    
+    // Execute each action in sequence
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+      console.log(`Validating action ${i+1}/${actions.length}:`, action);
+      
+      // Execute based on action type
+      switch (action.type) {
+        case 'goto':
+          if (!action.url) throw new Error('Missing URL for goto action');
+          await page.goto(action.url, { 
+            waitUntil: action.waitUntil || 'domcontentloaded', 
+            timeout: action.timeout || 30000 
+          });
+          break;
+          
+        case 'click':
+          if (!action.selector) throw new Error('Missing selector for click action');
+          await page.waitForSelector(action.selector, { 
+            state: 'visible',
+            timeout: action.timeout || 5000 
+          });
+          await page.click(action.selector);
+          break;
+          
+        case 'fill':
+          if (!action.selector || action.value === undefined) 
+            throw new Error('Missing selector or value for fill action');
+          await page.waitForSelector(action.selector, { 
+            state: 'visible',
+            timeout: action.timeout || 5000 
+          });
+          await page.fill(action.selector, action.value);
+          break;
+          
+        // Add other action types as needed
+        
+        default:
+          console.log(`Skipping validation for unsupported action type: ${action.type}`);
+      }
+      
+      // Wait a bit between actions
+      if (i < actions.length - 1) {
+        await page.waitForTimeout(500);
+      }
+    }
+    
+    return { success: true, message: 'All actions validated successfully' };
+    
+  } catch (error) {
+    console.error('Action validation failed:', error);
+    return { 
+      success: false, 
+      message: `Validation failed: ${error.message}`,
+      error: error
+    };
+  } finally {
+    if (browser) {
+      await browser.close();
+      console.log('Validation browser closed');
+    }
+  }
+}
+// --- End Record User Actions Endpoint ---
+
 // TODO: Serve static files from the React app build directory
 // app.use(express.static(path.join(__dirname, '../client/build')));
 

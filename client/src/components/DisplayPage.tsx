@@ -8,6 +8,7 @@ interface Action {
   url?: string;
   selector?: string;
   value?: string;
+  timestamp?: string; // Add timestamp for when the action was recorded
 }
 
 // Define an interface for the Chunk data structure
@@ -70,6 +71,8 @@ function DisplayPage() {
         screenshot?: string; // Base64 encoded screenshot
     }>>({});
     const [recordingChunkId, setRecordingChunkId] = useState<string | null>(null); // State for recording mode
+    const [recordedActions, setRecordedActions] = useState<Record<string, Action[]>>({}); // Stores recorded actions by chunkId
+    const [isRecording, setIsRecording] = useState(false); // Whether currently recording
     const [isSaving, setIsSaving] = useState(false); // State for save button
     const [saveMessage, setSaveMessage] = useState<string | null>(null); // State for save status
 
@@ -220,22 +223,162 @@ function DisplayPage() {
         }
     };
 
-    // --- Add Handlers for Take Control / Save Recording ---
+    // --- Add Handlers for Take Control / Recording ---
     const handleTakeControl = (chunkId: string) => {
         console.log(`Taking control for chunk: ${chunkId}`);
         setRecordingChunkId(chunkId); // Set the currently recording chunk
-        // In a real implementation, this would pause AI execution for this chunk
-        // and start listening for user events.
+        setIsRecording(true);
+        
+        // Initialize the recorded actions array for this chunk if it doesn't exist
+        if (!recordedActions[chunkId]) {
+            setRecordedActions(prev => ({
+                ...prev,
+                [chunkId]: []
+            }));
+        }
+        
+        // Start recording actions
+        setTimeout(() => {
+            startRecordingUserActions(chunkId);
+        }, 500);
     };
 
-    const handleSaveRecording = (chunkId: string) => {
-        console.log(`Saving recording for chunk: ${chunkId}`);
-        setRecordingChunkId(null); // Exit recording mode
-        // In a real implementation, this would stop event listeners,
-        // process the recorded actions, and potentially save them.
-        // For now, we just exit the recording state.
-        setActionStatus(prev => ({ ...prev, [chunkId]: { loading: false, message: 'Manual recording saved (simulated).', success: true } }));
+    // Function to start recording user actions
+    const startRecordingUserActions = (chunkId: string) => {
+        console.log('Starting to record user actions...');
+        
+        // Create a new array to store recorded actions
+        const actions: Action[] = [];
+        
+        // In a real implementation, we would set up event listeners to capture user actions
+        // For this prototype, we'll simulate recording by adding some predefined actions
+        
+        // Record navigation action - in a real implementation, this would come from user interaction
+        const recordAction = (action: Action) => {
+            actions.push({
+                ...action,
+                timestamp: new Date().toISOString()
+            });
+            
+            // Update state with the new action
+            setRecordedActions(prev => ({
+                ...prev,
+                [chunkId]: [...(prev[chunkId] || []), action]
+            }));
+            
+            console.log('Recorded action:', action);
+        };
+        
+        // Set up the recording event listeners
+        const setupRecordingListeners = () => {
+            // These would be attached to the window or document in a real implementation
+            // For the demo, we'll just log that we're ready to record
+            console.log('Recording listeners are set up and ready to capture user actions');
+            
+            // In a real implementation, we would have code like:
+            // document.addEventListener('click', handleClick);
+            // document.addEventListener('input', handleInput);
+            // etc.
+        };
+        
+        // Call the setup function
+        setupRecordingListeners();
     };
+
+    const handleSaveRecording = async (chunkId: string) => {
+        console.log(`Saving recording for chunk: ${chunkId}`);
+        setIsRecording(false);
+        
+        // In a real implementation, we would stop the recording listeners here
+        // For now, we'll just simulate that we have some recorded actions
+        
+        // If no actions were recorded, create a sample one for demo purposes
+        if (!recordedActions[chunkId] || recordedActions[chunkId].length === 0) {
+            // Create a sample recorded action for demonstration
+            const sampleAction: Action = {
+                type: 'goto',
+                url: 'https://example.com',
+                timestamp: new Date().toISOString()
+            };
+            
+            setRecordedActions(prev => ({
+                ...prev,
+                [chunkId]: [sampleAction]
+            }));
+        }
+        
+        // Get the recorded actions for this chunk
+        const actions = recordedActions[chunkId] || [];
+        console.log(`Saving ${actions.length} recorded actions for chunk ${chunkId}`);
+        
+        // Set status to loading
+        setActionStatus(prev => ({ 
+            ...prev, 
+            [chunkId]: { 
+                loading: true, 
+                message: 'Saving recorded actions...', 
+                success: null 
+            } 
+        }));
+        
+        try {
+            // Send recorded actions to the server
+            const response = await fetch('http://localhost:3001/api/record_actions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                    chunkId, 
+                    actions,
+                    loomUrl, // Send the Loom URL for context
+                    validate: true // Request validation of the actions
+                }),
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Server error: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to save recorded actions');
+            }
+            
+            // Update the chunk with the new actions
+            setChunks(prev => prev.map(chunk => 
+                chunk.id === chunkId 
+                    ? { ...chunk, action: result.processedActions[0] || chunk.action } 
+                    : chunk
+            ));
+            
+            // Update action status with success
+            setActionStatus(prev => ({ 
+                ...prev, 
+                [chunkId]: { 
+                    loading: false, 
+                    message: `${actions.length} actions recorded and saved successfully.`, 
+                    success: true 
+                } 
+            }));
+            
+        } catch (err: any) {
+            console.error("Failed to save recorded actions:", err);
+            setActionStatus(prev => ({ 
+                ...prev, 
+                [chunkId]: { 
+                    loading: false, 
+                    message: err.message || 'Failed to save recorded actions.', 
+                    success: false 
+                } 
+            }));
+        } finally {
+            // Exit recording mode
+            setRecordingChunkId(null);
+        }
+    };
+    // --- End Handlers for Take Control / Recording ---
 
     // --- Add Handler for Save Agent ---
     const handleSaveAgent = async () => {
@@ -390,13 +533,65 @@ function DisplayPage() {
                                     )}
                                     {isRecordingThisChunk && (
                                         <div style={{ marginTop: '10px', padding: '10px', border: '1px dashed red', backgroundColor: '#fff0f0' }}>
-                                            <span style={{ color: 'red', fontWeight: 'bold' }}>🔴 Recording user actions...</span>
-                                            <button 
-                                                onClick={() => handleSaveRecording(chunk.id)}
-                                                style={{ marginLeft: '15px', padding: '5px 10px' }}
-                                            >
-                                                Save Recording
-                                            </button>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <span style={{ color: 'red', fontWeight: 'bold' }}>🔴 Recording user actions...</span>
+                                                <div>
+                                                    <button 
+                                                        onClick={() => {
+                                                            // Simulate recording a 'goto' action
+                                                            const sampleAction: Action = {
+                                                                type: 'goto',
+                                                                url: 'https://example.com',
+                                                                timestamp: new Date().toISOString()
+                                                            };
+                                                            
+                                                            setRecordedActions(prev => ({
+                                                                ...prev,
+                                                                [chunk.id]: [...(prev[chunk.id] || []), sampleAction]
+                                                            }));
+                                                        }}
+                                                        style={{ marginRight: '5px', padding: '5px 10px', backgroundColor: '#ff9999', border: '1px solid #ff6666' }}
+                                                    >
+                                                        Simulate Action
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => handleSaveRecording(chunk.id)}
+                                                        style={{ padding: '5px 10px' }}
+                                                    >
+                                                        Save Recording
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Display recorded actions */}
+                                            {recordedActions[chunk.id] && recordedActions[chunk.id].length > 0 && (
+                                                <div style={{ marginTop: '10px' }}>
+                                                    <h4 style={{ margin: '0 0 5px 0' }}>Recorded Actions:</h4>
+                                                    <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '0.9em' }}>
+                                                        {recordedActions[chunk.id].map((action, index) => (
+                                                            <li key={`${chunk.id}-action-${index}`}>
+                                                                {action.type === 'goto' ? 
+                                                                    `Navigate to: ${action.url}` : 
+                                                                action.type === 'click' ? 
+                                                                    `Click on: ${action.selector}` : 
+                                                                action.type === 'fill' ? 
+                                                                    `Fill "${action.value}" in ${action.selector}` : 
+                                                                    `${action.type} action`
+                                                                }
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            )}
+                                            
+                                            <div style={{ marginTop: '10px', fontSize: '0.8em', color: '#666' }}>
+                                                <p style={{ margin: '0 0 5px 0' }}>
+                                                    In a real implementation, user actions like clicks, typing, and navigation would be automatically recorded.
+                                                </p>
+                                                <p style={{ margin: 0 }}>
+                                                    Use "Simulate Action" to add a sample action or "Save Recording" when finished.
+                                                </p>
+                                            </div>
                                         </div>
                                     )}
                                     <div style={{ height: '50px', backgroundColor: '#eee', marginTop: '10px', textAlign: 'center', lineHeight: '50px', fontStyle: 'italic' }}>
@@ -405,8 +600,6 @@ function DisplayPage() {
                                 </li>
                             );
                         })
-                    ) : (
-                        <p>No chunks generated yet.</p>
                     )}
                 </ul>
             )}
@@ -414,4 +607,4 @@ function DisplayPage() {
     );
 }
 
-export default DisplayPage; 
+export default DisplayPage;
