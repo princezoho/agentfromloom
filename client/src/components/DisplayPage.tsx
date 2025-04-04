@@ -59,6 +59,7 @@ function DisplayPage() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [actionStatus, setActionStatus] = useState<Record<string, { loading: boolean; message: string; success: boolean | null }>>({});
+    const [recordingChunkId, setRecordingChunkId] = useState<string | null>(null); // State for recording mode
 
     // useEffect hook to call the analysis API when the component mounts
     useEffect(() => {
@@ -133,6 +134,24 @@ function DisplayPage() {
         }
     };
 
+    // --- Add Handlers for Take Control / Save Recording ---
+    const handleTakeControl = (chunkId: string) => {
+        console.log(`Taking control for chunk: ${chunkId}`);
+        setRecordingChunkId(chunkId); // Set the currently recording chunk
+        // In a real implementation, this would pause AI execution for this chunk
+        // and start listening for user events.
+    };
+
+    const handleSaveRecording = (chunkId: string) => {
+        console.log(`Saving recording for chunk: ${chunkId}`);
+        setRecordingChunkId(null); // Exit recording mode
+        // In a real implementation, this would stop event listeners,
+        // process the recorded actions, and potentially save them.
+        // For now, we just exit the recording state.
+        setActionStatus(prev => ({ ...prev, [chunkId]: { loading: false, message: 'Manual recording saved (simulated).', success: true } }));
+    };
+    // --- End Handlers ---
+
     if (!loomUrl) {
         return <div>Error: No Loom URL provided.</div>;
     }
@@ -171,20 +190,28 @@ function DisplayPage() {
                     {chunks.length > 0 ? (
                         chunks.map(chunk => {
                             const status = actionStatus[chunk.id];
+                            const isRecordingThisChunk = recordingChunkId === chunk.id;
                             return (
-                                <li key={chunk.id} style={{ border: '1px solid #ccc', marginBottom: '10px', padding: '15px', textAlign: 'left' }}>
+                                <li key={chunk.id} style={{ border: isRecordingThisChunk ? '2px solid red' : '1px solid #ccc', marginBottom: '10px', padding: '15px', textAlign: 'left' }}>
                                     <div>
                                         <strong>Chunk {chunk.order}: {chunk.name}</strong> ({chunk.startTime} - {chunk.endTime})
                                     </div>
-                                    {chunk.action && (
+                                    {chunk.action && !isRecordingThisChunk && (
                                         <div style={{ marginTop: '10px' }}>
                                             <pre style={{ fontSize: '0.9em', backgroundColor: '#f0f0f0', padding: '5px' }}>Action: {JSON.stringify(chunk.action)}</pre>
                                             <button
                                                 onClick={() => handleExecuteAction(chunk.id, chunk.action)}
-                                                disabled={status?.loading}
-                                                style={{ marginTop: '5px', padding: '5px 10px' }}
+                                                disabled={status?.loading || !!recordingChunkId}
+                                                style={{ marginTop: '5px', padding: '5px 10px', marginRight: '10px' }}
                                             >
                                                 {status?.loading ? 'Running...' : 'Run Action'}
+                                            </button>
+                                            <button 
+                                                onClick={() => handleTakeControl(chunk.id)}
+                                                disabled={!!recordingChunkId}
+                                                style={{ padding: '5px 10px' }}
+                                            >
+                                                Take Control
                                             </button>
                                             {status && (
                                                 <span style={{
@@ -197,7 +224,17 @@ function DisplayPage() {
                                              )}
                                         </div>
                                     )}
-                                    {/* Placeholder for micro-video preview */}
+                                    {isRecordingThisChunk && (
+                                        <div style={{ marginTop: '10px', padding: '10px', border: '1px dashed red', backgroundColor: '#fff0f0' }}>
+                                            <span style={{ color: 'red', fontWeight: 'bold' }}>🔴 Recording user actions...</span>
+                                            <button 
+                                                onClick={() => handleSaveRecording(chunk.id)}
+                                                style={{ marginLeft: '15px', padding: '5px 10px' }}
+                                            >
+                                                Save Recording
+                                            </button>
+                                        </div>
+                                    )}
                                     <div style={{ height: '50px', backgroundColor: '#eee', marginTop: '10px', textAlign: 'center', lineHeight: '50px', fontStyle: 'italic' }}>
                                         [Micro-video preview placeholder]
                                     </div>
