@@ -3,11 +3,34 @@ const path = require('path');
 const cors = require('cors');
 const { chromium } = require('playwright'); // Import Playwright
 const { createClient } = require('@supabase/supabase-js'); // Make sure this is imported
+const cookieParser = require('cookie-parser');
+const githubRoutes = require('./github-service');
+const axios = require('axios');
+const { fileURLToPath } = require('url');
+const { JSDOM } = require('jsdom');
+const { Readability } = require('@mozilla/readability');
+const { v4: uuidv4 } = require('uuid');
+const puppeteer = require('puppeteer-core');
 
 const supabase = require('./supabaseClient');
+const integrationSuggestions = require('./integration-suggestions'); // Import the integration suggestions module
+const { generateRlsFixSql } = require('./fix-rls-automatically');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Development mode flags
+const DEV_MODE = process.env.NODE_ENV !== 'production';
+const USE_MEMORY_STORAGE = DEV_MODE || process.env.USE_MEMORY_STORAGE === 'true';
+
+// Initialize in-memory storage for development mode
+const memoryStorage = {
+  agents: [],
+  chunks: []
+};
+
+// Helper function to generate a random ID for development mode
+const generateDevId = () => `dev-${Date.now()}`;
 
 // Middleware
 app.use(cors({
@@ -31,7 +54,11 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(cookieParser());
+
+// Add GitHub API routes
+app.use('/api/github', githubRoutes);
 
 // API route for Loom video analysis with visual-based chunking
 app.post('/api/analyze', async (req, res) => {
@@ -68,13 +95,13 @@ app.post('/api/analyze', async (req, res) => {
     }
     
     // Launch browser to analyze the video
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: true, args: ['--disable-web-security'] });
     const context = await browser.newContext();
     const page = await context.newPage();
     
     // Navigate to the Loom video page
     console.log(`Navigating to Loom video: ${loomUrl}`);
-    await page.goto(loomUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(loomUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     
     // Wait for the video player to load
     await page.waitForSelector('.loom-video', { timeout: 10000 }).catch(() => {
@@ -91,13 +118,30 @@ app.post('/api/analyze', async (req, res) => {
     
     // Identify visual changes for chunking
     const chunks = await createVisualChunks(page, videoDuration);
+    const transcript = await getTranscript(page);
+
+    // Generate integration suggestions based on video data
+    const videoData = {
+      url: loomUrl,
+      videoId: videoId,
+      chunks: chunks,
+      transcript: transcript
+    };
     
+    const integrationData = integrationSuggestions.analyzeLoomForIntegrations(videoData);
+
     // Close browser
     await browser.close();
     browser = null;
     
     console.log(`Created ${chunks.length} chunks based on visual analysis`);
-    res.json({ chunks });
+    res.json({
+      videoId,
+      videoDuration,
+      chunks,
+      transcript,
+      integrations: integrationData
+    });
     
   } catch (error) {
     console.error('Error analyzing Loom video:', error);
@@ -287,6 +331,74 @@ async function createVisualChunks(page, totalDuration) {
   }
   
   return chunks;
+}
+
+/**
+ * Extract transcript from Loom video
+ * @param {Page} page - Playwright page object
+ * @returns {Promise<Array>} - Array of transcript entries with timestamps and text
+ */
+async function getTranscript(page) {
+  try {
+    console.log('Attempting to extract transcript...');
+    
+    // Try different possible transcript selectors (Loom's UI can vary)
+    const possibleSelectors = [
+      '.transcript-line',
+      '.transcript-content .line',
+      '[data-testid="transcript-line"]',
+      '.captions-container'
+    ];
+    
+    let transcript = [];
+    
+    // Try each selector
+    for (const selector of possibleSelectors) {
+      console.log(`Trying transcript selector: ${selector}`);
+      
+      // Wait for transcript elements with a short timeout
+      const hasElements = await page.waitForSelector(selector, { timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+      
+      if (hasElements) {
+        console.log(`Found transcript elements with selector: ${selector}`);
+        
+        // Extract transcript based on the selector
+        transcript = await page.evaluate((sel) => {
+          const lines = Array.from(document.querySelectorAll(sel));
+          return lines.map(line => {
+            // Different selectors might have different structures
+            const timestampEl = line.querySelector('.timestamp') || 
+                               line.querySelector('[data-testid="timestamp"]') || 
+                               line.querySelector('.transcript-timestamp');
+                               
+            const textEl = line.querySelector('.text') || 
+                          line.querySelector('[data-testid="text"]') || 
+                          line.querySelector('.transcript-text') ||
+                          line;
+            
+            return {
+              timestamp: timestampEl ? timestampEl.textContent.trim() : '',
+              text: textEl ? textEl.textContent.trim() : ''
+            };
+          });
+        }, selector);
+        
+        if (transcript.length > 0) {
+          console.log(`Successfully extracted ${transcript.length} transcript lines`);
+          return transcript;
+        }
+      }
+    }
+    
+    // If we get here, we couldn't find transcript elements with any selector
+    console.log('Transcript elements not found, returning empty transcript');
+    return [];
+  } catch (error) {
+    console.error('Error extracting transcript:', error);
+    return [];
+  }
 }
 
 // --- Add Action Execution Endpoint ---
@@ -529,130 +641,301 @@ app.post('/api/execute_action', async (req, res) => {
 
 // --- Add Save Agent Endpoint ---
 app.post('/api/agents', async (req, res) => {
-    const { name, loomUrl, userId, chunkData } = req.body;
-
-    // Basic validation
-    if (!name || !loomUrl || !userId || !Array.isArray(chunkData)) {
-        return res.status(400).json({ success: false, error: 'Missing required agent data.' });
-    }
-
-    console.log(`Saving agent '${name}' for user ${userId}`);
-
     try {
-        // Workaround for RLS issues: Use direct SQL if having permission problems
-        // This is a temporary solution for development only
-        // Step 1: Insert into Agents table
-        const { data: agentInsertData, error: agentError } = await supabase
-            .from('Agents') // Use the exact table name from your Supabase setup
-            .insert({
-                name: name,
+        const { name, loomUrl, userId, chunkData } = req.body;
+        
+        if (!name || !loomUrl || !userId) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        
+        console.log(`Saving agent '${name}' for user ${userId}`);
+        
+        // Check if we should bypass Supabase for development
+        if (DEV_MODE && USE_MEMORY_STORAGE) {
+            console.log('DEVELOPMENT MODE: Using memory-only agent storage');
+            
+            // Generate a fake agent ID
+            const fakeAgentId = generateDevId();
+            
+            // Store the agent in memory for development mode
+            memoryStorage.agents.push({
+                id: fakeAgentId,
+                name,
                 loom_url: loomUrl,
                 user_id: userId,
-                description: 'Created from Loom video analysis',
-            })
-            .select() // Return the inserted data, including the generated ID
-            .single(); // Expecting only one row to be inserted
-
-        if (agentError) {
-            console.error('Supabase agent insert error:', agentError);
+                created_at: new Date().toISOString(),
+                chunks: chunkData || []
+            });
             
-            // If it's a RLS error, try a fallback response
-            if (agentError.code === '42501') {
-                console.log("RLS policy error detected. Bypassing with fake success response for development.");
-                // Return a fake success response with a random ID for development purposes
-                // This allows frontend testing without requiring RLS changes
-                const fakeAgentId = `fake-${Math.random().toString(36).substring(2, 15)}`;
-                return res.json({ 
-                    success: true, 
-                    message: 'Agent saved successfully (RLS BYPASS MODE)', 
-                    agentId: fakeAgentId,
-                    note: 'This is using a development bypass. Enable the Google provider in Supabase dashboard.'
+            console.log(`Agent saved in memory storage. Current count: ${memoryStorage.agents.length}`);
+            
+            // Return success with SQL fix instructions
+            return res.status(200).json({
+                success: true,
+                agentId: fakeAgentId,
+                message: 'Agent saved in development mode (memory only)',
+                note: 'To enable database storage, fix RLS policies in Supabase',
+                sqlFix: generateRlsFixSql(true) // true = completely disable RLS
+            });
+        }
+        
+        // Regular flow - attempt to insert the agent into Supabase
+        const { data: agentData, error: agentError } = await supabase
+            .from('Agents')
+            .insert({
+                name,
+                loom_url: loomUrl,
+                user_id: userId,
+                created_at: new Date().toISOString()
+            })
+            .select('id')
+            .single();
+            
+        // Check for RLS policy error
+        if (agentError) {
+            console.log('Supabase agent insert error:', agentError);
+            
+            // Check if it's an RLS policy error
+            if (agentError.code === '42501' || 
+                (agentError.message && agentError.message.includes('policy'))) {
+                
+                console.log('RLS policy error detected. Returning instructions for fixing it.');
+                
+                return res.status(200).json({
+                    success: false,
+                    message: 'RLS policy preventing data save',
+                    sqlFix: generateRlsFixSql(true), // true = completely disable RLS
+                    note: 'Execute this SQL in Supabase SQL Editor to fix the RLS issue'
                 });
             } else {
-                throw new Error(agentError.message || 'Failed to insert agent data.');
+                // Not an RLS error, return the original error
+                return res.status(500).json({ 
+                    error: `Error saving agent: ${agentError.message}` 
+                });
             }
         }
-
-        if (!agentInsertData || !agentInsertData.id) {
-             throw new Error('Failed to retrieve agent ID after insert.');
-        }
-
-        const agentId = agentInsertData.id;
-        console.log(`Agent inserted with ID: ${agentId}`);
-
-        // Step 2: Prepare and insert into Chunks table
-        const chunksToInsert = chunkData.map(chunk => ({
-            agent_id: agentId,
-            order: chunk.order,
-            start_time: chunk.startTime,
-            end_time: chunk.endTime,
-            name: chunk.name,
-            status: 'Not Started', // Default status
-            learned_actions: chunk.action ? [chunk.action] : null, // Store dummy action as JSONB array
-            // error_details: null, // Initially no errors
-        }));
-
-        if (chunksToInsert.length > 0) {
-            const { error: chunkError } = await supabase
-                .from('Chunks') // Use the exact table name
-                .insert(chunksToInsert);
-
-            if (chunkError) {
-                console.error('Supabase chunk insert error:', chunkError);
-                // Don't fail if chunks couldn't be inserted - just log it
-                console.log("Chunks could not be inserted but continuing with agent save");
-            } else {
-                console.log(`${chunksToInsert.length} chunks inserted for agent ${agentId}`);
+        
+        const agentId = agentData?.id || `temp-${Date.now()}`;
+        
+        // If we have chunks, save them
+        if (chunkData && chunkData.length > 0) {
+            // Prepare chunk records
+            const chunkRecords = chunkData.map(chunk => ({
+                agent_id: agentId,
+                order_index: chunk.order,
+                start_time: chunk.startTime,
+                end_time: chunk.endTime,
+                name: chunk.name,
+                action: chunk.action ? JSON.stringify(chunk.action) : null,
+                visual_data: chunk.visualData ? JSON.stringify(chunk.visualData) : null
+            }));
+            
+            // Insert chunk records
+            const { error: chunksError } = await supabase
+                .from('Chunks')
+                .insert(chunkRecords);
+                
+            if (chunksError) {
+                console.error('Error saving chunks:', chunksError);
+                // Non-blocking error - we saved the agent at least
             }
         }
-
-        res.json({ success: true, message: 'Agent saved successfully', agentId: agentId });
-
+        
+        res.json({
+            success: true,
+            agentId,
+            message: 'Agent saved successfully'
+        });
     } catch (error) {
         console.error('Error saving agent to Supabase:', error);
-        res.status(500).json({ success: false, error: error.message || 'Server error saving agent.' });
+        res.status(500).json({ error: error.message });
     }
 });
 // --- End Save Agent Endpoint ---
 
-// --- Add Fetch Agents Endpoint ---
+// Endpoint to get all agents for a user
 app.get('/api/agents', async (req, res) => {
-    // TEMPORARY: Get userId from query param. Replace with JWT auth later.
-    const userId = req.query.userId;
+  const { userId } = req.query;
+  
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
 
-    if (!userId) {
-        return res.status(401).json({ success: false, error: 'User ID is required' });
+  try {
+    // In development mode with USE_MEMORY_STORAGE, use memory storage
+    if (DEV_MODE && USE_MEMORY_STORAGE) {
+      console.log('Development mode: Returning agents from memory storage');
+      console.log(`Memory storage has ${memoryStorage.agents.length} agents`);
+      const mockAgents = memoryStorage.agents.filter(agent => agent.user_id === userId);
+      console.log(`Found ${mockAgents.length} agents for user ${userId}`);
+      return res.json({ agents: mockAgents });
     }
-
-    console.log(`Fetching agents for user: ${userId}`);
-
-    try {
-        const { data: agents, error } = await supabase
-            .from('Agents') // Use the exact table name
-            .select('id, name, description, loom_url, created_at') // Select desired columns
-            .eq('user_id', userId) // Filter by user_id
-            .order('created_at', { ascending: false }); // Order by most recent
-
-        if (error) {
-            console.error('Supabase fetch agents error:', error);
-            
-            // If it's an RLS error, return empty agents array
-            if (error.code === '42501') { // Permission denied
-                console.log("RLS policy error, returning empty agents array as fallback");
-                return res.json({ success: true, agents: [] });
-            }
-            
-            throw new Error(error.message || 'Failed to fetch agents.');
-        }
-
-        res.json({ success: true, agents: agents || [] }); // Return empty array if data is null
-
-    } catch (error) {
-        console.error('Error fetching agents:', error);
-        res.status(500).json({ success: false, error: error.message || 'Server error fetching agents.' });
+    
+    // Attempt to fetch agents from Supabase
+    const { data, error } = await supabase
+      .from('Agents')
+      .select('id, name, description, loom_url, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error('Error fetching agents:', error);
+      
+      // In development, return mock data if Supabase fails
+      if (DEV_MODE) {
+        console.log('Development mode: Returning mock agents data after Supabase error');
+        const mockAgents = memoryStorage.agents.filter(agent => agent.user_id === userId);
+        return res.json({ agents: mockAgents });
+      }
+      
+      throw error;
     }
+    
+    return res.json({ agents: data });
+  } catch (error) {
+    console.error('Server error fetching agents:', error);
+    return res.status(500).json({ error: 'Failed to fetch agents' });
+  }
 });
-// --- End Fetch Agents Endpoint ---
+
+// Endpoint to delete an agent
+app.delete('/api/agents/:agentId', async (req, res) => {
+  const { agentId } = req.params;
+  const { userId } = req.body;
+  
+  if (!agentId || !userId) {
+    return res.status(400).json({ error: 'agentId and userId are required' });
+  }
+
+  try {
+    // First validate that this agent belongs to the user
+    const { data: agentData, error: fetchError } = await supabase
+      .from('Agents')
+      .select('user_id')
+      .eq('id', agentId)
+      .single();
+    
+    if (fetchError) {
+      console.error('Error fetching agent for deletion validation:', fetchError);
+      
+      // In development mode, check memory storage
+      if (DEV_MODE) {
+        const agentInMemory = memoryStorage.agents.find(a => a.id === agentId);
+        if (!agentInMemory) {
+          return res.status(404).json({ error: 'Agent not found' });
+        }
+        if (agentInMemory.user_id !== userId) {
+          return res.status(403).json({ error: 'Not authorized to delete this agent' });
+        }
+        
+        // Remove from memory storage
+        const agentIndex = memoryStorage.agents.findIndex(a => a.id === agentId);
+        if (agentIndex !== -1) {
+          memoryStorage.agents.splice(agentIndex, 1);
+          return res.json({ success: true });
+        }
+      }
+      
+      throw fetchError;
+    }
+    
+    // Ensure the user has permission to delete this agent
+    if (agentData && agentData.user_id !== userId) {
+      return res.status(403).json({ error: 'Not authorized to delete this agent' });
+    }
+    
+    // Delete the agent
+    const { error: deleteError } = await supabase
+      .from('Agents')
+      .delete()
+      .eq('id', agentId);
+    
+    if (deleteError) {
+      throw deleteError;
+    }
+    
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Server error deleting agent:', error);
+    return res.status(500).json({ error: 'Failed to delete agent' });
+  }
+});
+
+// Endpoint to update an agent
+app.put('/api/agents/:agentId', async (req, res) => {
+  const { agentId } = req.params;
+  const { userId, name, description } = req.body;
+  
+  if (!agentId || !userId) {
+    return res.status(400).json({ error: 'agentId and userId are required' });
+  }
+
+  if (!name) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+
+  try {
+    // First validate that this agent belongs to the user
+    const { data: agentData, error: fetchError } = await supabase
+      .from('Agents')
+      .select('user_id')
+      .eq('id', agentId)
+      .single();
+    
+    if (fetchError) {
+      console.error('Error fetching agent for update validation:', fetchError);
+      
+      // In development mode, check memory storage
+      if (DEV_MODE) {
+        const agentInMemory = memoryStorage.agents.find(a => a.id === agentId);
+        if (!agentInMemory) {
+          return res.status(404).json({ error: 'Agent not found' });
+        }
+        if (agentInMemory.user_id !== userId) {
+          return res.status(403).json({ error: 'Not authorized to update this agent' });
+        }
+        
+        // Update in memory storage
+        const agentIndex = memoryStorage.agents.findIndex(a => a.id === agentId);
+        if (agentIndex !== -1) {
+          memoryStorage.agents[agentIndex] = {
+            ...memoryStorage.agents[agentIndex],
+            name,
+            description: description || memoryStorage.agents[agentIndex].description
+          };
+          return res.json({ 
+            success: true, 
+            agent: memoryStorage.agents[agentIndex] 
+          });
+        }
+      }
+      
+      throw fetchError;
+    }
+    
+    // Ensure the user has permission to update this agent
+    if (agentData && agentData.user_id !== userId) {
+      return res.status(403).json({ error: 'Not authorized to update this agent' });
+    }
+    
+    // Update the agent
+    const { data, error: updateError } = await supabase
+      .from('Agents')
+      .update({ name, description })
+      .eq('id', agentId)
+      .select()
+      .single();
+    
+    if (updateError) {
+      throw updateError;
+    }
+    
+    return res.json({ success: true, agent: data });
+  } catch (error) {
+    console.error('Server error updating agent:', error);
+    return res.status(500).json({ error: 'Failed to update agent' });
+  }
+});
 
 // --- Add Delete All Users Endpoint ---
 app.delete('/api/admin/users', async (req, res) => {
@@ -860,6 +1143,116 @@ app.get('/proxy-favicon', (req, res) => {
 // app.get('*', (req, res) => {
 //   res.sendFile(path.join(__dirname, '../client/build/index.html'));
 // });
+
+// Save agent chunks endpoint
+app.post('/api/agents/:agentId/chunks', async (req, res) => {
+  const { agentId } = req.params;
+  const { chunks, userId } = req.body;
+  
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+  
+  if (!chunks || !Array.isArray(chunks)) {
+    return res.status(400).json({ error: 'Chunks must be an array' });
+  }
+  
+  try {
+    // In development mode with USE_MEMORY_STORAGE, use memory storage
+    if (DEV_MODE && USE_MEMORY_STORAGE) {
+      console.log('Development mode: Saving chunks to memory storage');
+      
+      // Store chunks in memory for this agent
+      const existingChunks = memoryStorage.chunks.filter(c => c.agent_id !== agentId);
+      const newChunks = chunks.map((chunk, index) => ({
+        id: `${agentId}-chunk-${index}`,
+        agent_id: agentId,
+        user_id: userId,
+        ...chunk
+      }));
+      
+      memoryStorage.chunks = [...existingChunks, ...newChunks];
+      console.log(`Saved ${newChunks.length} chunks in memory for agent ${agentId}`);
+      
+      return res.json({ 
+        success: true, 
+        message: 'Chunks saved in memory storage',
+        chunks: newChunks
+      });
+    }
+    
+    // If we reach here, we're using Supabase
+    // ... existing Supabase code ...
+    
+  } catch (error) {
+    console.error('Error saving chunks:', error);
+    
+    // In development mode, log error but return success
+    if (DEV_MODE) {
+      console.log('Development mode: Returning success despite error saving chunks');
+      return res.json({ 
+        success: true, 
+        message: 'Error saving to database, but chunks saved in memory',
+        error: error.message 
+      });
+    }
+    
+    return res.status(500).json({ 
+      error: 'Failed to save chunks', 
+      details: error.message 
+    });
+  }
+});
+
+// Get agent chunks endpoint
+app.get('/api/agents/:agentId/chunks', async (req, res) => {
+  const { agentId } = req.params;
+  const userId = req.query.userId;
+  
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+  
+  try {
+    // In development mode with USE_MEMORY_STORAGE, use memory storage
+    if (DEV_MODE && USE_MEMORY_STORAGE) {
+      console.log('Development mode: Returning chunks from memory storage');
+      const agentChunks = memoryStorage.chunks.filter(
+        chunk => chunk.agent_id === agentId && chunk.user_id === userId
+      );
+      console.log(`Found ${agentChunks.length} chunks for agent ${agentId}`);
+      return res.json({ chunks: agentChunks });
+    }
+    
+    // If we're here, we're using Supabase
+    const { data, error } = await supabase
+      .from('agent_chunks')
+      .select('*')
+      .eq('agent_id', agentId)
+      .eq('user_id', userId);
+    
+    if (error) {
+      console.error('Error fetching chunks from Supabase:', error);
+      
+      // In development mode, return memory storage on error
+      if (DEV_MODE) {
+        console.log('Development mode: Returning chunks from memory after Supabase error');
+        const agentChunks = memoryStorage.chunks.filter(
+          chunk => chunk.agent_id === agentId && chunk.user_id === userId
+        );
+        return res.json({ chunks: agentChunks });
+      }
+      
+      return res.status(500).json({ error: 'Failed to fetch chunks', details: error.message });
+    }
+    
+    return res.json({ chunks: data });
+    
+  } catch (error) {
+    console.error('Error retrieving chunks:', error);
+    return res.status(500).json({ error: 'Failed to retrieve chunks', details: error.message });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);

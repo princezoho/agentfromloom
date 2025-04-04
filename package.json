@@ -1,6 +1,30 @@
 {
+  "name": "agentfromloom",
+  "version": "1.0.0",
+  "description": "Platform to create agents from Loom videos",
+  "scripts": {
+    "client": "cd client && npm start",
+    "server": "cd server && node server.js",
+    "start": "concurrently \"npm run server\" \"npm run client\"",
+    "install-all": "npm install && cd client && npm install && cd ../server && npm install",
+    "build": "cd client && npm run build",
+    "test": "cd client && npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/agentfromloom.git"
+  },
+  "keywords": [
+    "loom",
+    "automation",
+    "agents",
+    "playwright"
+  ],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4",
-    "canvas": "^3.1.0"
+    "canvas": "^3.1.0",
+    "concurrently": "^8.2.2"
   }
 }

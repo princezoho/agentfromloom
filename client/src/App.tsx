@@ -12,6 +12,7 @@ import DisplayPage from './components/DisplayPage';
 import AuthPage from './components/AuthPage';
 import AuthCallback from './components/AuthCallback';
 import AgentDashboard from './components/AgentDashboard';
+import GitHubCallback from './components/GitHubCallback';
 import './App.css';
 
 function App() {
@@ -81,6 +82,7 @@ function App() {
             <AgentDashboard key={session.user.id} session={session} /> : 
             <div>Please log in to view the dashboard.</div>
           } />
+          <Route path="/github/callback" element={<GitHubCallback />} />
         </Routes>
       </div>
     </Router>

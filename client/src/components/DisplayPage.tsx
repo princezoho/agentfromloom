@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient'; // Import Supabase client
+import IntegrationSuggestions from './IntegrationSuggestions'; // Import our new component
 
 // Define Action interface (can be expanded later)
 interface Action {
@@ -69,6 +70,7 @@ function DisplayPage() {
     const [chunks, setChunks] = useState<Chunk[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [integrationData, setIntegrationData] = useState(null); // Add state for integration data
     const [actionStatus, setActionStatus] = useState<Record<string, { 
         loading: boolean; 
         message: string; 
@@ -80,6 +82,7 @@ function DisplayPage() {
     const [isRecording, setIsRecording] = useState(false); // Whether currently recording
     const [isSaving, setIsSaving] = useState(false); // State for save button
     const [saveMessage, setSaveMessage] = useState<string | null>(null); // State for save status
+    const [recordingCleanup, setRecordingCleanup] = useState<(() => void) | null>(null); // State for recording cleanup
 
     // useEffect hook to call the analysis API when the component mounts
     useEffect(() => {
@@ -122,6 +125,12 @@ function DisplayPage() {
                     if (data.chunks) {
                         console.log(`Successfully retrieved ${data.chunks.length} chunks`);
                         setChunks(data.chunks);
+                        
+                        // Set integration data if available
+                        if (data.integrations) {
+                            console.log('Received integration suggestions:', data.integrations);
+                            setIntegrationData(data.integrations);
+                        }
                     } else {
                         throw new Error('Invalid data structure received from server: missing chunks array');
                     }
@@ -255,47 +264,129 @@ function DisplayPage() {
         // Create a new array to store recorded actions
         const actions: Action[] = [];
         
-        // In a real implementation, we would set up event listeners to capture user actions
-        // For this prototype, we'll simulate recording by adding some predefined actions
-        
-        // Record navigation action - in a real implementation, this would come from user interaction
+        // Record action helper function
         const recordAction = (action: Action) => {
-            actions.push({
+            const actionWithTimestamp = {
                 ...action,
                 timestamp: new Date().toISOString()
-            });
+            };
+            
+            actions.push(actionWithTimestamp);
             
             // Update state with the new action
             setRecordedActions(prev => ({
                 ...prev,
-                [chunkId]: [...(prev[chunkId] || []), action]
+                [chunkId]: [...(prev[chunkId] || []), actionWithTimestamp]
             }));
             
-            console.log('Recorded action:', action);
+            console.log('Recorded action:', actionWithTimestamp);
         };
         
         // Set up the recording event listeners
         const setupRecordingListeners = () => {
-            // These would be attached to the window or document in a real implementation
-            // For the demo, we'll just log that we're ready to record
-            console.log('Recording listeners are set up and ready to capture user actions');
+            // Handler for click events
+            const handleClick = (event: MouseEvent) => {
+                if (!isRecording) return;
+                
+                // Get the target element
+                const target = event.target as HTMLElement;
+                if (!target) return;
+                
+                // Try to get a good selector for the element
+                let selector = '';
+                
+                // Try to use ID if available
+                if (target.id) {
+                    selector = `#${target.id}`;
+                } 
+                // Try to use class if available
+                else if (target.className && typeof target.className === 'string') {
+                    const classes = target.className.split(' ').filter(c => c).join('.');
+                    if (classes) selector = `.${classes}`;
+                } 
+                // Use tag name and position as last resort
+                else {
+                    const tagName = target.tagName.toLowerCase();
+                    selector = tagName;
+                    
+                    // Add nth-child if parent has multiple same-tag children
+                    const parent = target.parentElement;
+                    if (parent) {
+                        const siblings = Array.from(parent.children);
+                        const sameTagSiblings = siblings.filter(el => el.tagName.toLowerCase() === tagName);
+                        if (sameTagSiblings.length > 1) {
+                            const index = siblings.indexOf(target) + 1;
+                            selector = `${tagName}:nth-child(${index})`;
+                        }
+                    }
+                }
+                
+                // Create a click action
+                recordAction({
+                    type: 'click',
+                    selector: selector,
+                    value: target.textContent?.trim() || ''
+                });
+            };
             
-            // In a real implementation, we would have code like:
-            // document.addEventListener('click', handleClick);
-            // document.addEventListener('input', handleInput);
-            // etc.
+            // Handler for input events
+            const handleInput = (event: Event) => {
+                if (!isRecording) return;
+                
+                const target = event.target as HTMLInputElement;
+                if (!target) return;
+                
+                // Skip if not an input/textarea/select
+                if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+                
+                // Get a selector for the input
+                let selector = '';
+                if (target.id) {
+                    selector = `#${target.id}`;
+                } else if (target.name) {
+                    selector = `${target.tagName.toLowerCase()}[name="${target.name}"]`;
+                } else if (target.className && typeof target.className === 'string') {
+                    const classes = target.className.split(' ').filter(c => c).join('.');
+                    if (classes) selector = `.${classes}`;
+                } else {
+                    selector = target.tagName.toLowerCase();
+                }
+                
+                // Create a fill action
+                recordAction({
+                    type: 'fill',
+                    selector: selector,
+                    value: target.value
+                });
+            };
+            
+            // Add event listeners
+            document.addEventListener('click', handleClick);
+            document.addEventListener('change', handleInput);
+            
+            // Create a cleanup function
+            return () => {
+                document.removeEventListener('click', handleClick);
+                document.removeEventListener('change', handleInput);
+            };
         };
         
-        // Call the setup function
-        setupRecordingListeners();
+        // Call the setup function and store cleanup function
+        const cleanup = setupRecordingListeners();
+        
+        // Store cleanup function for later use
+        setRecordingCleanup(() => cleanup);
     };
 
     const handleSaveRecording = async (chunkId: string) => {
         console.log(`Saving recording for chunk: ${chunkId}`);
         setIsRecording(false);
         
-        // In a real implementation, we would stop the recording listeners here
-        // For now, we'll just simulate that we have some recorded actions
+        // Clean up recording listeners if they exist
+        if (recordingCleanup) {
+            recordingCleanup();
+            setRecordingCleanup(null);
+        }
         
         // If no actions were recorded, create a sample one for demo purposes
         if (!recordedActions[chunkId] || recordedActions[chunkId].length === 0) {
@@ -420,62 +511,8 @@ function DisplayPage() {
 
             console.log("Saving agent to Supabase:", { name: agentName, userId: user.id, loomUrl });
             
-            // Try saving through Supabase first
-            try {
-                const { data: agent, error: agentError } = await supabase
-                    .from('Agents')
-                    .insert({
-                        name: agentName,
-                        loom_url: loomUrl,
-                        user_id: user.id,
-                        description: 'Created from Loom video analysis'
-                    })
-                    .select()
-                    .single();
-
-                if (agentError) {
-                    console.error('Error inserting agent with Supabase:', agentError);
-                    
-                    // If it's an RLS error, try the server API as fallback
-                    if (agentError.code === '42501' || agentError.message.includes('policy')) {
-                        throw new Error('RLS policy error - falling back to server API');
-                    } else {
-                        throw new Error(`Supabase error: ${agentError.message}`);
-                    }
-                }
-
-                // If successful direct save, also save the chunks
-                const chunksToInsert = chunks.map(chunk => ({
-                    agent_id: agent.id,
-                    order: chunk.order,
-                    start_time: chunk.startTime,
-                    end_time: chunk.endTime,
-                    name: chunk.name,
-                    status: 'Not Started',
-                    learned_actions: chunk.action ? [chunk.action] : []
-                }));
-
-                const { error: chunksError } = await supabase
-                    .from('Chunks')
-                    .insert(chunksToInsert);
-
-                if (chunksError) {
-                    console.error('Error inserting chunks:', chunksError);
-                    // Don't fail if just the chunks failed
-                }
-
-                setSaveMessage(`✅ Agent '${agentName}' saved successfully! (Agent ID: ${agent.id})`);
-                return;
-                
-            } catch (directError: any) {
-                // If direct Supabase save failed, try through server API
-                console.warn("Direct Supabase save failed, trying server API:", directError.message);
-                
-                // Fall through to server API approach
-            }
-            
-            // Server API approach (fallback)
-            console.log("Using server API fallback for saving agent");
+            // Server API approach - handles RLS policies automatically
+            console.log("Using server API for agent saving");
             const response = await fetch('http://localhost:3001/api/agents', {
                 method: 'POST',
                 headers: {
@@ -489,17 +526,50 @@ function DisplayPage() {
                 }),
             });
 
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || `Failed to save agent with status: ${response.status}`);
-            }
-
             const result = await response.json();
             
-            if (result.note) {
+            // Check if we got RLS fix instructions
+            if (result.sqlFix) {
+                console.log("Received RLS fix instructions");
+                
+                // Display the SQL and instructions in a more readable format
+                const sqlInstructions = `
+                    // RLS Policy Fix Required
+                    // Please run these SQL commands in the Supabase SQL Editor to fix RLS policies:
+                    
+                    ${result.sqlFix}
+                    
+                    // Steps:
+                    // 1. Log in to Supabase: https://dafizawmeehypygvgdge.supabase.co
+                    // 2. Go to SQL Editor
+                    // 3. Create a new query
+                    // 4. Paste the SQL above
+                    // 5. Click "Run"
+                `;
+                
+                // Alert the user about the RLS issue and provide SQL
+                alert(
+                    "Row Level Security Policy Issue Detected\n\n" +
+                    "The app can't save agents to the database because of RLS policy restrictions.\n\n" +
+                    "During development, your agent has been saved locally (in memory).\n\n" +
+                    "SQL instructions for fixing this have been logged to the console."
+                );
+                
+                // Log SQL to console for easy copying
+                console.log(sqlInstructions);
+                
+                if (result.success) {
+                    // Development mode storage was successful
+                    setSaveMessage(`✅ Agent '${agentName}' saved in development mode only. Check console for RLS fix.`);
+                } else {
+                    // Development mode storage failed
+                    setSaveMessage(`⚠️ Agent '${agentName}' couldn't be saved. RLS policy needs to be fixed. Check console.`);
+                }
+            } else if (result.note) {
                 // This is a development bypass message
                 setSaveMessage(`✅ Agent '${agentName}' saved (dev mode). ${result.note}`);
             } else {
+                // Normal successful save
                 setSaveMessage(`✅ Agent '${agentName}' saved successfully! (Agent ID: ${result.agentId})`);
             }
 
@@ -541,6 +611,16 @@ function DisplayPage() {
             </div>
 
             <hr style={{ width: '80%', margin: '20px 0' }} />
+
+            {/* Integration Suggestions */}
+            {!isLoading && integrationData && (
+                <div style={{ width: '80%', maxWidth: '800px', marginBottom: '20px' }}>
+                    <h2>Integration Suggestions</h2>
+                    <div style={{ border: '1px solid #e0e0e0', borderRadius: '5px', padding: '15px', backgroundColor: '#f9f9f9' }}>
+                        <IntegrationSuggestions integrationData={integrationData} />
+                    </div>
+                </div>
+            )}
 
             {/* Save Agent Button Area */}
              <div style={{ width: '80%', maxWidth: '800px', marginBottom: '15px', textAlign: 'right' }}>
@@ -619,21 +699,48 @@ function DisplayPage() {
                                                 <div>
                                                     <button 
                                                         onClick={() => {
-                                                            // Simulate recording a 'goto' action
-                                                            const sampleAction: Action = {
+                                                            // Ask user for a URL to navigate to
+                                                            const url = window.prompt('Enter a URL to navigate to:', 'https://example.com');
+                                                            if (!url) return;
+                                                            
+                                                            // Create a goto action
+                                                            const navigationAction: Action = {
                                                                 type: 'goto',
-                                                                url: 'https://example.com',
+                                                                url,
                                                                 timestamp: new Date().toISOString()
                                                             };
                                                             
+                                                            // Add to recorded actions
                                                             setRecordedActions(prev => ({
                                                                 ...prev,
-                                                                [chunk.id]: [...(prev[chunk.id] || []), sampleAction]
+                                                                [chunk.id]: [...(prev[chunk.id] || []), navigationAction]
                                                             }));
                                                         }}
                                                         style={{ marginRight: '5px', padding: '5px 10px', backgroundColor: '#ff9999', border: '1px solid #ff6666' }}
                                                     >
-                                                        Simulate Action
+                                                        Add Navigation
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => {
+                                                            // Clean up recording listeners if they exist
+                                                            if (recordingCleanup) {
+                                                                recordingCleanup();
+                                                                setRecordingCleanup(null);
+                                                            }
+                                                            // Clear recording state
+                                                            setIsRecording(false);
+                                                            setRecordingChunkId(null);
+                                                            
+                                                            // Remove recorded actions for this chunk
+                                                            setRecordedActions(prev => {
+                                                                const newState = {...prev};
+                                                                delete newState[chunk.id];
+                                                                return newState;
+                                                            });
+                                                        }}
+                                                        style={{ marginRight: '5px', padding: '5px 10px', backgroundColor: '#f5f5f5', border: '1px solid #ddd' }}
+                                                    >
+                                                        Cancel
                                                     </button>
                                                     <button 
                                                         onClick={() => handleSaveRecording(chunk.id)}
@@ -670,7 +777,7 @@ function DisplayPage() {
                                                     In a real implementation, user actions like clicks, typing, and navigation would be automatically recorded.
                                                 </p>
                                                 <p style={{ margin: 0 }}>
-                                                    Use "Simulate Action" to add a sample action or "Save Recording" when finished.
+                                                    Use "Add Navigation" to add a new navigation action or "Save Recording" when finished.
                                                 </p>
                                             </div>
                                         </div>
