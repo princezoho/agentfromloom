@@ -178,6 +178,43 @@ app.post('/api/agents', async (req, res) => {
 });
 // --- End Save Agent Endpoint ---
 
+// --- Add Fetch Agents Endpoint ---
+app.get('/api/agents', async (req, res) => {
+    // TEMPORARY: Get userId from query param. Replace with JWT auth later.
+    const userId = req.query.userId;
+
+    if (!userId) {
+        return res.status(401).json({ success: false, error: 'User ID is required' });
+    }
+
+    console.log(`Fetching agents for user: ${userId}`);
+
+    try {
+        const { data: agents, error } = await supabase
+            .from('Agents') // Use the exact table name
+            .select('id, name, description, loom_url, created_at') // Select desired columns
+            .eq('user_id', userId) // Filter by user_id
+            .order('created_at', { ascending: false }); // Order by most recent
+
+        if (error) {
+            console.error('Supabase fetch agents error:', error);
+            // RLS errors often manifest as empty data rather than explicit errors,
+            // but we check for explicit errors too.
+            if (error.code === '42501') { // permission denied
+                 return res.status(403).json({ success: false, error: 'Permission denied. Check RLS policies.' });
+            }
+            throw new Error(error.message || 'Failed to fetch agents.');
+        }
+
+        res.json({ success: true, agents: agents || [] }); // Return empty array if data is null
+
+    } catch (error) {
+        console.error('Error fetching agents:', error);
+        res.status(500).json({ success: false, error: error.message || 'Server error fetching agents.' });
+    }
+});
+// --- End Fetch Agents Endpoint ---
+
 // TODO: Serve static files from the React app build directory
 // app.use(express.static(path.join(__dirname, '../client/build')));
 
