@@ -10,17 +10,20 @@ This project allows users to record repetitive online actions via Loom, then hav
 
 - **Loom URL Input**: Submit and process Loom video URLs
 - **User Authentication**: Login/signup with email/password or Google OAuth
-- **Basic Video Display**: View embedded Loom videos
-- **OAuth Integration**: Secure authentication using Google accounts
+- **Video Chunking**: Automatically divide Loom videos into logical segments
+- **Chunk Management**: View and interact with video chunks
+- **Visual Previews**: See visual representation of each chunk in the video
+- **Basic Action Detection**: Automatically detect potential actions for each chunk
 
 ## Development Status
 
-The application currently implements Milestones 1-2 from the Development Roadmap with a focus on:
+The application currently implements Milestones 1-3 from the Development Roadmap with a focus on:
 
 - **Basic Loom URL Input and Display** (Milestone 1): Process and display Loom videos
 - **User Login/Signup with Supabase** (Milestone 2): Complete authentication system with Google OAuth integration
+- **Basic Video Chunking and Display** (Milestone 3): Automatically break videos into manageable chunks with visual representation
 
-We're now ready to begin work on Milestone 3: Basic Video Chunking and Display.
+We're now ready to begin work on Milestone 4: Integration with Playwright for Local Action Replication.
 
 ## Setup Instructions
 
