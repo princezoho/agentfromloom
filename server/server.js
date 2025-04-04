@@ -108,6 +108,76 @@ app.post('/api/execute_action', async (req, res) => {
 });
 // --- End Action Execution Endpoint ---
 
+// --- Add Save Agent Endpoint ---
+app.post('/api/agents', async (req, res) => {
+    const { name, loomUrl, userId, chunkData } = req.body;
+
+    // Basic validation
+    if (!name || !loomUrl || !userId || !Array.isArray(chunkData)) {
+        return res.status(400).json({ success: false, error: 'Missing required agent data.' });
+    }
+
+    console.log(`Saving agent '${name}' for user ${userId}`);
+
+    try {
+        // Step 1: Insert into Agents table
+        const { data: agentInsertData, error: agentError } = await supabase
+            .from('Agents') // Use the exact table name from your Supabase setup
+            .insert({
+                name: name,
+                loom_url: loomUrl,
+                user_id: userId,
+                // description: description, // Add if description is sent from frontend
+            })
+            .select() // Return the inserted data, including the generated ID
+            .single(); // Expecting only one row to be inserted
+
+        if (agentError) {
+            console.error('Supabase agent insert error:', agentError);
+            throw new Error(agentError.message || 'Failed to insert agent data.');
+        }
+
+        if (!agentInsertData || !agentInsertData.id) {
+             throw new Error('Failed to retrieve agent ID after insert.');
+        }
+
+        const agentId = agentInsertData.id;
+        console.log(`Agent inserted with ID: ${agentId}`);
+
+        // Step 2: Prepare and insert into Chunks table
+        const chunksToInsert = chunkData.map(chunk => ({
+            agent_id: agentId,
+            order: chunk.order,
+            start_time: chunk.startTime,
+            end_time: chunk.endTime,
+            name: chunk.name,
+            status: 'Not Started', // Default status
+            learned_actions: chunk.action ? [chunk.action] : null, // Store dummy action as JSONB array
+            // error_details: null, // Initially no errors
+        }));
+
+        if (chunksToInsert.length > 0) {
+            const { error: chunkError } = await supabase
+                .from('Chunks') // Use the exact table name
+                .insert(chunksToInsert);
+
+            if (chunkError) {
+                console.error('Supabase chunk insert error:', chunkError);
+                // Consider attempting to delete the agent row if chunks fail? (Transactional safety)
+                throw new Error(chunkError.message || 'Failed to insert chunk data.');
+            }
+            console.log(`${chunksToInsert.length} chunks inserted for agent ${agentId}`);
+        }
+
+        res.json({ success: true, message: 'Agent saved successfully', agentId: agentId });
+
+    } catch (error) {
+        console.error('Error saving agent to Supabase:', error);
+        res.status(500).json({ success: false, error: error.message || 'Server error saving agent.' });
+    }
+});
+// --- End Save Agent Endpoint ---
+
 // TODO: Serve static files from the React app build directory
 // app.use(express.static(path.join(__dirname, '../client/build')));
 

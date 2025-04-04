@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { supabase } from '../supabaseClient'; // Import Supabase client
 
 // Define Action interface (can be expanded later)
 interface Action {
@@ -60,6 +61,8 @@ function DisplayPage() {
     const [error, setError] = useState<string | null>(null);
     const [actionStatus, setActionStatus] = useState<Record<string, { loading: boolean; message: string; success: boolean | null }>>({});
     const [recordingChunkId, setRecordingChunkId] = useState<string | null>(null); // State for recording mode
+    const [isSaving, setIsSaving] = useState(false); // State for save button
+    const [saveMessage, setSaveMessage] = useState<string | null>(null); // State for save status
 
     // useEffect hook to call the analysis API when the component mounts
     useEffect(() => {
@@ -150,7 +153,63 @@ function DisplayPage() {
         // For now, we just exit the recording state.
         setActionStatus(prev => ({ ...prev, [chunkId]: { loading: false, message: 'Manual recording saved (simulated).', success: true } }));
     };
-    // --- End Handlers ---
+
+    // --- Add Handler for Save Agent ---
+    const handleSaveAgent = async () => {
+        const agentName = window.prompt('Please enter a name for this agent:');
+        if (!agentName) {
+            setSaveMessage('Agent save cancelled.');
+            return;
+        }
+
+        setSaveMessage(null);
+        setIsSaving(true);
+
+        try {
+            // Get user session
+            const { data: { user }, error: userError } = await supabase.auth.getUser();
+            if (userError || !user) {
+                throw new Error(userError?.message || 'You must be logged in to save agents.');
+            }
+
+            if (!loomUrl) {
+                throw new Error('Loom URL is missing.');
+            }
+
+            // Prepare data for backend
+            const agentData = {
+                name: agentName,
+                loomUrl: loomUrl,
+                userId: user.id, // Include user ID
+                chunkData: chunks // Send the current chunks
+            };
+
+            const response = await fetch('http://localhost:3001/api/agents', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                     // Include auth token if backend validation is added later
+                     // 'Authorization': `Bearer ${session.access_token}` 
+                },
+                body: JSON.stringify(agentData),
+            });
+
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || `Failed to save agent with status: ${response.status}`);
+            }
+
+            setSaveMessage(`Agent '${agentName}' saved successfully! (Agent ID: ${result.agentId})`);
+
+        } catch (err: any) {
+            console.error("Failed to save agent:", err);
+            setSaveMessage(`Error saving agent: ${err.message}`);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+    // --- End Handler ---
 
     if (!loomUrl) {
         return <div>Error: No Loom URL provided.</div>;
@@ -181,6 +240,14 @@ function DisplayPage() {
             </div>
 
             <hr style={{ width: '80%', margin: '20px 0' }} />
+
+            {/* Save Agent Button Area */}
+             <div style={{ width: '80%', maxWidth: '800px', marginBottom: '15px', textAlign: 'right' }}>
+                 <button onClick={handleSaveAgent} disabled={isLoading || isSaving || !!recordingChunkId || chunks.length === 0}>
+                     {isSaving ? 'Saving...' : 'Save Agent'}
+                 </button>
+                 {saveMessage && <p style={{ fontSize: '0.9em', color: saveMessage.includes('Error') ? 'red' : 'green' }}>{saveMessage}</p>}
+             </div>
 
             <h2>Video Chunks</h2>
             {isLoading && <p>Analyzing video...</p>}
